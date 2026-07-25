@@ -1,0 +1,159 @@
+:root {
+  color-scheme: light dark;
+  --accent: #d43c32;
+  --accent-dark: #a01e5a;
+}
+
+body {
+  width: 320px;
+  margin: 0;
+  font-family: system-ui, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: linear-gradient(45deg, var(--accent), var(--accent-dark));
+  color: #fff;
+}
+
+header h1 {
+  font-size: 15px;
+  margin: 0;
+  font-weight: 600;
+}
+
+main {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+button {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: rgba(128, 128, 128, 0.12);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-dark);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.player-row {
+  display: flex;
+  gap: 8px;
+}
+
+.player-row .player-btn:first-child {
+  flex: 1;
+}
+
+.player-row #pg-stop {
+  width: 44px;
+}
+
+.player-controls {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.player-controls label {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.player-controls select {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+}
+
+.player-controls select option,
+.player-controls select optgroup {
+  color: initial;
+  background: Canvas;
+}
+
+.rate-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rate-group select {
+  flex: 1;
+}
+
+.rate-group button {
+  width: 28px;
+  flex-shrink: 0;
+  padding: 5px 0;
+  border-radius: 6px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  background: transparent;
+  color: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rate-group button:hover {
+  background: rgba(128, 128, 128, 0.15);
+}
+
+.guide {
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.guide p {
+  margin: 0 0 6px;
+}
+
+.guide ol {
+  margin: 0 0 10px;
+  padding-left: 18px;
+}
+
+.guide li {
+  margin-bottom: 2px;
+}
