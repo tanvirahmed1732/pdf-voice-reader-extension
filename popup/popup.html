@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PDF Voice Reader</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="../icons/icon48.png" alt="" width="24" height="24">
+    <h1>PDF Voice Reader</h1>
+  </header>
+
+  <main>
+    <section id="current-tab-section">
+      <button id="open-current" class="primary" disabled hidden>Open this PDF in reader</button>
+      <p id="current-hint" class="hint"></p>
+    </section>
+
+    <section id="player-section" hidden>
+      <div class="player-row">
+        <button id="pg-play" class="primary player-btn">▶ Play</button>
+        <button id="pg-stop" class="player-btn" disabled>⏹</button>
+      </div>
+      <div class="player-controls">
+        <label for="pg-voice">Voice</label>
+        <select id="pg-voice"></select>
+        <label for="pg-rate">Speed</label>
+        <div class="rate-group">
+          <button id="pg-rate-down" type="button" title="Slower (−0.05×)">−</button>
+          <select id="pg-rate">
+            <option value="0.5">0.5×</option>
+            <option value="0.75">0.75×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="1.75">1.75×</option>
+            <option value="2">2×</option>
+          </select>
+          <button id="pg-rate-up" type="button" title="Faster (+0.05×)">+</button>
+        </div>
+      </div>
+      <p id="pg-status" class="hint"></p>
+    </section>
+
+    <section id="file-access-section" hidden>
+      <div class="guide">
+        <p><strong>One-time setup needed for local PDFs</strong></p>
+        <ol>
+          <li>Turn on <strong>Allow access to file URLs</strong>.</li>
+          <li>Return to this PDF tab.</li>
+          <li>Click the extension again.</li>
+        </ol>
+        <button id="open-settings">Open extension settings</button>
+      </div>
+    </section>
+
+    <section>
+      <button id="open-local">Open a local PDF…</button>
+      <p class="hint">Opens the reader where you can pick or drop a PDF file.</p>
+    </section>
+  </main>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>
