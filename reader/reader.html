@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PDF Voice Reader</title>
+  <link rel="stylesheet" href="../vendor/pdfjs/text_layer.css">
+  <link rel="stylesheet" href="reader.css">
+</head>
+<body>
+  <header id="toolbar">
+    <div class="toolbar-group">
+      <button id="btn-play" class="tb primary" title="Read from selection (Space)">▶ Read</button>
+      <button id="btn-stop" class="tb" title="Stop" disabled>⏹</button>
+      <button id="btn-prev" class="tb" title="Previous sentence (←)" disabled>⏮</button>
+      <button id="btn-next" class="tb" title="Next sentence (→)" disabled>⏭</button>
+    </div>
+
+    <div class="toolbar-group">
+      <label for="sel-rate">Speed</label>
+      <button id="btn-rate-down" class="tb" title="Slower (−0.05×)">−</button>
+      <select id="sel-rate" class="tb">
+        <option value="0.5">0.5×</option>
+        <option value="0.75">0.75×</option>
+        <option value="1" selected>1×</option>
+        <option value="1.25">1.25×</option>
+        <option value="1.5">1.5×</option>
+        <option value="1.75">1.75×</option>
+        <option value="2">2×</option>
+      </select>
+      <button id="btn-rate-up" class="tb" title="Faster (+0.05×)">+</button>
+
+      <label for="sel-voice">Voice</label>
+      <select id="sel-voice" class="tb wide"></select>
+      <button id="btn-voices" class="tb" title="Download high-quality voices">Manage voices…</button>
+    </div>
+
+    <div class="toolbar-group">
+      <label for="page-input">Page</label>
+      <input id="page-input" type="number" min="1" value="1" class="tb page-input" title="Go to page" disabled>
+      <span id="page-total" class="page-total">/ 0</span>
+      <button id="btn-zoom-out" class="tb" title="Zoom out">−</button>
+      <span id="zoom-level" class="zoom-level">100%</span>
+      <button id="btn-zoom-in" class="tb" title="Zoom in">+</button>
+    </div>
+
+    <div id="toolbar-note" class="toolbar-note" title=""></div>
+
+    <div id="status" class="toolbar-group status"></div>
+  </header>
+
+  <button id="autoscroll-pill" hidden>Resume auto-scroll</button>
+
+  <main id="viewer-container">
+    <div id="pages"></div>
+
+    <div id="empty-state">
+      <div class="drop-card">
+        <img src="../icons/icon128.png" alt="" width="64" height="64">
+        <h2>Open a PDF to start listening</h2>
+        <p>Drop a PDF file anywhere on this page, or</p>
+        <button id="btn-pick" class="primary">Choose a PDF file</button>
+        <input type="file" id="file-input" accept="application/pdf,.pdf" hidden>
+      </div>
+    </div>
+
+    <div id="loading" hidden>
+      <p id="loading-text">Loading PDF…</p>
+      <progress id="loading-progress" max="100" value="0"></progress>
+    </div>
+  </main>
+
+  <aside id="voice-panel" hidden>
+    <div class="panel-header">
+      <h2>High-quality voices</h2>
+      <button id="btn-close-panel" class="tb">✕</button>
+    </div>
+    <p class="panel-hint">These neural voices are downloaded once and then work fully offline. Word highlighting is estimated (sentence highlighting stays exact).</p>
+    <ul id="voice-list"></ul>
+    <p id="storage-info" class="panel-hint"></p>
+  </aside>
+
+  <script type="module" src="reader.js"></script>
+</body>
+</html>
