@@ -40,27 +40,49 @@ await reader.selectOption('#sel-voice', 'edge:en-US-AndrewMultilingualNeural');
 await reader.selectOption('#sel-rate', '1.5');
 await reader.click('#btn-play');
 
-// Record (sentenceIndex, timestamp) each time the status sentence number changes.
-const marks = await reader.evaluate(async () => {
+// Record (sentenceIndex, timestamp) on each sentence change, plus the longest
+// interval with NO progress at all — no sentence advance and no word-highlight
+// movement. A long sentence legitimately takes its audio duration to play (the
+// word highlight keeps moving); a true stall is silence with nothing moving.
+const { marks, maxSilence } = await reader.evaluate(async () => {
   const status = document.getElementById('status');
   const out = [];
   let last = -1;
+  let lastWord = '';
+  let lastProgress = -1; // set at first sentence start — startup synth isn't a stall
+  let maxSilence = 0;
   const t0 = performance.now();
   const parse = () => {
     const m = status.textContent.match(/sentence (\d+)\//);
     return m ? Number(m[1]) : -1;
   };
+  const wordSig = () => {
+    const h = CSS.highlights.get('tts-word');
+    if (!h) return '';
+    const r = [...h][0];
+    return r ? `${r.startOffset}:${r.endOffset}` : '';
+  };
   const banner = () => document.getElementById('toolbar-note').textContent;
   return await new Promise((resolve) => {
     const iv = setInterval(() => {
+      const now = performance.now();
       const k = parse();
+      const w = wordSig();
+      let progressed = false;
       if (k !== -1 && k !== last) {
         last = k;
-        out.push({ k, t: Math.round(performance.now() - t0), note: banner() });
+        out.push({ k, t: Math.round(now - t0), note: banner() });
+        progressed = true;
       }
-      if (performance.now() - t0 > 45000) {
+      if (w !== lastWord) {
+        lastWord = w;
+        progressed = true;
+      }
+      if (lastProgress >= 0) maxSilence = Math.max(maxSilence, now - lastProgress);
+      if (progressed && last !== -1) lastProgress = now;
+      if (now - t0 > 45000) {
         clearInterval(iv);
-        resolve(out);
+        resolve({ marks: out, maxSilence: Math.round(maxSilence) });
       }
     }, 100);
   });
@@ -80,11 +102,14 @@ const median = gaps[Math.floor(gaps.length / 2)];
 const max = gaps[gaps.length - 1];
 console.log(`sentences advanced: ${marks.length}`);
 console.log(`gap ms — median ${median}, max ${max}, all: ${gaps.join(', ')}`);
+console.log(`max no-progress interval: ${maxSilence} ms`);
 const notes = marks.filter((m) => m.note).map((m) => m.note);
 if (notes.length) console.log('notes seen:', JSON.stringify([...new Set(notes)]));
-// Prose (the realistic case) must be tight — no waits at all. The arXiv stress
-// input has genuinely un-synthesizable sentences, so a *bounded* wait/skip is
-// acceptable there (the point is it's never the old 40s freeze).
-const smooth = useArxiv ? max <= 12000 : max <= Math.max(median * 2, 5000);
-console.log(smooth ? 'SMOOTH: PASS' : 'SMOOTH: FAIL (a long gap occurred)');
+// Sentence gaps track audio length (a long sentence takes its full duration —
+// lines are never skipped), so smoothness is judged on stalls: the longest
+// stretch where neither the sentence nor the word highlight moved. Prose (the
+// realistic case) must be tight; the arXiv stress input may hit a bounded
+// re-request wait, but never the old multi-10s freeze.
+const smooth = useArxiv ? maxSilence <= 8000 : maxSilence <= 4000;
+console.log(smooth ? 'SMOOTH: PASS' : 'SMOOTH: FAIL (playback stalled)');
 process.exit(smooth ? 0 : 1);
