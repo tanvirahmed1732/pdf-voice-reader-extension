@@ -11,7 +11,9 @@ const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
 const WSS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
 const GEC_VERSION = '1-143.0.3650.75';
 const OUTPUT_FORMAT = 'audio-24khz-48kbitrate-mono-mp3';
-const ATTEMPT_TIMEOUT = 12000; // generous: offscreen network is slower, let it finish
+const ATTEMPT_TIMEOUT = 12000; // background preloads — generous, let slow synths finish
+const URGENT_TIMEOUT = 10000; // attempts made while playback is waiting — bounded tighter
+const STALL_REFRESH_MS = 6000; // a preload hung this long is replaced by a priority request
 const MAX_RETRIES = 3; // retry so a transient failure recovers and the line is read
 const CONCURRENCY = 3; // parallel synths — the offscreen network is slower, so more
 // throughput helps build a lead; pacing (below) still avoids bursts that rate-limit
@@ -19,28 +21,43 @@ const CONN_GAP_MS = 350; // min spacing between new connections — a tight burs
 // trips the rate limiter; pacing keeps requests gentle even while filling the lead.
 const PRELOAD = 12; // sentences synthesized ahead of playback (a comfortable lead)
 const CACHE_MAX = 26;
-// Prefer READING every line over skipping it: when a sentence isn't ready, wait
-// for its retries to recover it (they mostly finish in the background during the
-// lead, so playback rarely waits at all). 8s covers a hung first attempt plus a
-// successful retry; it only bounds the pause for a genuinely un-synthesizable
-// sentence so it can never become a long freeze.
-const MAX_WAIT_MS = 15000;
-const MAX_CONSEC_FAIL = 6; // give up (real outage) only after this many in a row
+// Prefer READING every line over skipping it: a sentence that isn't ready is
+// re-requested (a fresh retry cycle) until it synthesizes — playback waits
+// instead of dropping the line. Only a sustained failure streak (a real
+// outage) stops playback, with an error rather than a silent skip.
+const MAX_CONSEC_FAIL = 4;
+const CYCLE_COOLDOWN_MS = 600; // between re-request cycles — lets a rate limit cool down
+
+// Text with no letters or digits (dot leaders, stray symbols) gets no audio
+// from the service — filtered out before wasting a connection on it.
+const SPEAKABLE_RE = /[\p{L}\p{N}]/u;
 
 // Caps concurrent WebSocket connections AND paces their starts, so bursts don't
 // trip the endpoint's rate limiter (the cause of the 403s / timeouts mid-read).
 let activeConns = 0;
 const connWaiters = [];
 let lastConnStart = 0;
-async function withConn(fn) {
+let recentFails = 0; // recent failures widen the gap below (adaptive back-off)
+async function withConn(fn, urgent = false) {
   // Reserve the slot SYNCHRONOUSLY with the gate check (no await in between) —
   // otherwise many callers pass the gate before any increments and a burst of
-  // connections opens at once, tripping the rate limiter.
-  while (activeConns >= CONCURRENCY) await new Promise((res) => connWaiters.push(res));
+  // connections opens at once, tripping the rate limiter. Urgent requests
+  // (playback is waiting on them) bypass the cap entirely: a single extra
+  // connection is not a burst, and a blocked sentence must never sit behind
+  // long-running background preloads.
+  if (!urgent) {
+    while (activeConns >= CONCURRENCY) await new Promise((res) => connWaiters.push(res));
+  }
   activeConns++;
   try {
-    const gap = CONN_GAP_MS - (Date.now() - lastConnStart);
-    if (gap > 0) await new Promise((r) => setTimeout(r, gap));
+    if (!urgent) {
+      // When the endpoint has been failing, space new connections further
+      // apart — hammering a tripped rate limiter turns one stall into a
+      // cascade.
+      const gapMs = CONN_GAP_MS * (1 + Math.min(recentFails, 4));
+      const gap = gapMs - (Date.now() - lastConnStart);
+      if (gap > 0) await new Promise((r) => setTimeout(r, gap));
+    }
     lastConnStart = Date.now();
     return await fn();
   } finally {
@@ -50,7 +67,7 @@ async function withConn(fn) {
 }
 
 // Resolves/rejects with `promise`, but rejects with 'not-ready' after `ms` so
-// playback never blocks indefinitely on a single slow/stuck sentence.
+// a hung background request can be replaced instead of waited out.
 function withDeadline(promise, ms) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('not-ready')), ms);
@@ -69,15 +86,22 @@ function withDeadline(promise, ms) {
 
 // Retries a failed/timed-out synthesis with backoff, aborting early if the
 // request became stale (user stopped, skipped, or changed rate/voice).
-async function edgeSynthesizeRetry(text, voiceId, rate, isStale) {
+async function edgeSynthesizeRetry(text, voiceId, rate, isStale, urgent = false) {
+  const timeout = urgent ? URGENT_TIMEOUT : ATTEMPT_TIMEOUT;
   let lastErr;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     if (isStale()) throw new Error('stale');
     try {
-      return await withConn(() => edgeSynthesize(text, voiceId, rate, ATTEMPT_TIMEOUT));
+      const result = await withConn(() => edgeSynthesize(text, voiceId, rate, timeout), urgent);
+      recentFails = Math.max(0, recentFails - 1);
+      return result;
     } catch (err) {
       lastErr = err;
+      recentFails = Math.min(recentFails + 1, 8);
       if (isStale() || attempt === MAX_RETRIES - 1) break;
+      // "No audio" is the service's answer for this text, not a glitch —
+      // retrying the identical request just burns a connection slot.
+      if (err.message === 'Edge voice returned no audio') break;
       // Brief backoff lets a transient rate-limit cool down before retrying.
       await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
     }
@@ -259,8 +283,8 @@ export class EdgeEngine {
     this.audio = null;
     this.currentUrl = null;
     this.raf = 0;
-    this.cache = new Map(); // "k:rate" -> Promise<{mp3, timings}>
-    this.skipped = new Set(); // sentence indexes abandoned mid-synthesis (cancel their retries)
+    this.cache = new Map(); // "k:rate" -> {promise: Promise<{mp3, timings}>, done}
+    this.reqSeq = new Map(); // "k:rate" -> latest request sequence (bumping it cancels older retries)
     this.speaking = false;
     this.paused = false;
     this.consecFail = 0;
@@ -292,6 +316,7 @@ export class EdgeEngine {
   setVoice(id) {
     this.voiceId = id;
     this.cache.clear();
+    this.reqSeq.clear();
   }
 
   setRate(r) {
@@ -301,18 +326,30 @@ export class EdgeEngine {
       const k = this.currentK;
       this.#stopPlayback();
       this.cache.clear();
+      this.reqSeq.clear();
       this.#playSentence(k, ++this.gen);
     }
   }
 
   speak(sentences, startIndex) {
-    this.stop();
+    const sameDoc = sentences === this.sentences;
+    this.gen++;
+    this.#stopPlayback();
+    if (sameDoc) {
+      // Keep already-synthesized audio (instant restart after a skip/jump);
+      // drop pending requests — their retry chains die with the old generation.
+      for (const [key, entry] of this.cache) {
+        if (!entry.done) this.cache.delete(key);
+      }
+    } else {
+      this.cache.clear();
+      this.reqSeq.clear();
+    }
     this.sentences = sentences;
-    this.skipped.clear();
     this.consecFail = 0;
     this.speaking = true;
     this.paused = false;
-    this.#playSentence(startIndex, ++this.gen);
+    this.#playSentence(startIndex, this.gen);
   }
 
   pause() {
@@ -333,7 +370,7 @@ export class EdgeEngine {
     this.paused = false;
     this.#stopPlayback();
     this.cache.clear();
-    this.skipped.clear();
+    this.reqSeq.clear();
   }
 
   // ---------- internals ----------
@@ -358,25 +395,48 @@ export class EdgeEngine {
     }
   }
 
-  #getBuffer(k, gen) {
+  #getBuffer(k, gen, urgent = false) {
     const key = `${k}:${this.rate}`;
-    if (this.cache.has(key)) return this.cache.get(key);
+    const existing = this.cache.get(key);
+    if (existing) return existing.promise;
     const text = this.sentences[k].text.replace(/\s/g, ' ');
-    const stale = () => gen !== this.gen || this.skipped.has(k);
-    const promise = edgeSynthesizeRetry(text, this.voiceId, this.rate, stale).then(({ mp3, words }) => ({
-      mp3,
-      timings: alignWords(this.sentences[k].text, words),
-    }));
-    promise.catch(() => this.cache.delete(key));
-    this.cache.set(key, promise);
+    const seq = (this.reqSeq.get(key) ?? 0) + 1;
+    this.reqSeq.set(key, seq);
+    const stale = () => gen !== this.gen || this.reqSeq.get(key) !== seq;
+    const entry = { done: false };
+    entry.promise = edgeSynthesizeRetry(text, this.voiceId, this.rate, stale, urgent).then(({ mp3, words }) => {
+      entry.done = true;
+      return { mp3, timings: alignWords(this.sentences[k].text, words) };
+    });
+    entry.promise.catch(() => {
+      if (this.cache.get(key) === entry) this.cache.delete(key);
+    });
+    this.cache.set(key, entry);
     if (this.cache.size > CACHE_MAX) {
       this.cache.delete(this.cache.keys().next().value);
     }
-    return promise;
+    return entry.promise;
   }
 
-  async #playSentence(k, gen) {
+  // Cancel a sentence's in-flight retries and drop its cache entry, so the
+  // next #getBuffer for it starts a completely fresh request.
+  #abandon(k) {
+    const key = `${k}:${this.rate}`;
+    this.reqSeq.set(key, (this.reqSeq.get(key) ?? 0) + 1);
+    this.cache.delete(key);
+  }
+
+  async #playSentence(k, gen, decodeRetries = 0) {
     if (gen !== this.gen) return;
+
+    // Sentences with nothing pronounceable produce no audio — pass them
+    // through instantly instead of spending a connection discovering that.
+    while (k < this.sentences.length && !SPEAKABLE_RE.test(this.sentences[k].text)) {
+      this.currentK = k;
+      this.onSentenceStart?.(k, []);
+      this.onSentenceEnd?.(k);
+      k++;
+    }
     if (k >= this.sentences.length) {
       this.speaking = false;
       this.onDone?.();
@@ -386,33 +446,58 @@ export class EdgeEngine {
     // Request the current sentence first (head of the connection queue), then
     // fill the lead so upcoming sentences synthesize (and retry) in the
     // background, never blocking playback.
-    const wanted = this.#getBuffer(k, gen);
+    let wanted = this.#getBuffer(k, gen);
     for (let i = 1; i <= PRELOAD && k + i < this.sentences.length; i++) {
-      this.#getBuffer(k + i, gen).catch(() => {});
+      if (SPEAKABLE_RE.test(this.sentences[k + i].text)) this.#getBuffer(k + i, gen).catch(() => {});
     }
 
+    // Wait for the sentence, re-requesting from scratch on failure — a line is
+    // never skipped. The "Buffering…" notice appears only when playback is
+    // actually held up, not on a preload hit.
     let item;
-    try {
-      // Never wait more than MAX_WAIT_MS for a sentence — if it isn't ready
-      // (stuck synth / rate-limit), skip ahead rather than pausing playback.
-      item = await withDeadline(wanted, MAX_WAIT_MS);
-      this.consecFail = 0;
-    } catch (err) {
-      if (gen !== this.gen) return;
-      this.consecFail++;
-      // Abandon this sentence: cancel its retries so it stops holding a
-      // connection slot (which would otherwise slow the lead and cascade).
-      this.skipped.add(k);
-      this.cache.delete(`${k}:${this.rate}`);
-      if (this.consecFail >= MAX_CONSEC_FAIL) {
-        this.speaking = false;
-        this.onError?.(err.message === 'not-ready' ? 'Voice service is not responding' : err.message);
-        return;
+    let noAudioTries = 0;
+    let urgent = false;
+    for (;;) {
+      const noticeTimer = setTimeout(() => this.onNotice?.('Buffering…'), 1500);
+      try {
+        // A background preload hung past STALL_REFRESH_MS gets replaced by a
+        // fresh priority request — usually done long before the hung attempt's
+        // own timeout would even fire. Priority requests are self-bounded, so
+        // they're awaited as-is.
+        item = urgent ? await wanted : await withDeadline(wanted, STALL_REFRESH_MS);
+        this.consecFail = 0;
+        break;
+      } catch (err) {
+        if (gen !== this.gen) return;
+        if (err.message === 'stale') return; // superseded by a newer request
+        this.#abandon(k);
+        if (err.message === 'not-ready') {
+          // Not a service failure — just a hung request being replaced.
+          urgent = true;
+          wanted = this.#getBuffer(k, gen, true);
+          continue;
+        }
+        if (err.message === 'Edge voice returned no audio' && ++noAudioTries >= 2) {
+          // The service has nothing to say for this text (rare) — there is no
+          // audio to lose, so moving on doesn't drop a spoken line.
+          this.onSentenceEnd?.(k);
+          this.#playSentence(k + 1, gen);
+          return;
+        }
+        this.consecFail++;
+        if (this.consecFail >= MAX_CONSEC_FAIL) {
+          this.speaking = false;
+          this.onError?.('Voice service is not responding (check your internet connection)');
+          return;
+        }
+        // Brief cooldown, then synthesize this same sentence again.
+        await new Promise((r) => setTimeout(r, CYCLE_COOLDOWN_MS));
+        if (gen !== this.gen) return;
+        urgent = true;
+        wanted = this.#getBuffer(k, gen, true);
+      } finally {
+        clearTimeout(noticeTimer);
       }
-      this.onNotice?.('Buffering…');
-      this.onSentenceEnd?.(k);
-      this.#playSentence(k + 1, gen);
-      return;
     }
     if (gen !== this.gen) return;
 
@@ -437,13 +522,36 @@ export class EdgeEngine {
     this.audio = audio;
     audio.onended = () => {
       if (gen !== this.gen) return;
+      if (this.audio === audio) this.audio = null; // a late resume() must not replay it
       this.onSentenceEnd?.(k);
       this.#playSentence(k + 1, gen);
     };
-    // If playback can't start (rare autoplay edge case), don't wedge — advance.
-    audio.play().catch(() => {
-      if (gen === this.gen) this.#playSentence(k + 1, gen);
-    });
+    // A corrupt/undecodable MP3 must not wedge playback: re-synthesize this
+    // sentence once, and only then move past it.
+    audio.onerror = () => {
+      if (gen !== this.gen) return;
+      this.#abandon(k);
+      if (decodeRetries < 1) {
+        this.#playSentence(k, gen, decodeRetries + 1);
+      } else {
+        this.onSentenceEnd?.(k);
+        this.#playSentence(k + 1, gen);
+      }
+    };
+    // If playback can't start (rare autoplay edge case), retry before giving
+    // up on the line; and if the user paused while this sentence was
+    // buffering, hold here — resume() starts the audio.
+    const tryPlay = (attempt) => {
+      audio.play().catch(() => {
+        if (gen !== this.gen || this.paused) return;
+        if (attempt < 3) setTimeout(() => gen === this.gen && !this.paused && tryPlay(attempt + 1), 250);
+        else {
+          this.onSentenceEnd?.(k);
+          this.#playSentence(k + 1, gen);
+        }
+      });
+    };
+    if (!this.paused) tryPlay(1);
 
     // Exact word highlighting, clocked off the element's own playback position
     // (drives highlighting in the visible reader; the offscreen path relies on
