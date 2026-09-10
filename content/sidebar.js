@@ -1,0 +1,323 @@
+// In-page sidebar: hosts the controls page (popup/popup.html) in an iframe on
+// the right edge of a web page, with a drag handle for any width. Replaces
+// Chrome's built-in side panel on web pages because that panel cannot shrink
+// below ~320px. Injected on demand by the service worker; classic script.
+//
+// Layout modes (persisted in chrome.storage.local as sidebarMode):
+//   push    — the page is narrowed so nothing sits behind the sidebar
+//   overlay — the sidebar floats above the page
+// Width is persisted as sidebarWidth and mirrored live into other tabs.
+
+(() => {
+  if (window.__pdfVoiceReaderSidebar) return; // already injected — listener persists
+
+  const MIN_WIDTH = 160;
+  const MAX_FRACTION = 0.9; // of the viewport
+  const DEFAULT_WIDTH = 320;
+  const ID = 'pvr-sidebar-host';
+
+  const S = (window.__pdfVoiceReaderSidebar = {
+    host: null,
+    root: null,
+    frame: null,
+    width: DEFAULT_WIDTH,
+    mode: 'push',
+    tabId: null,
+    dragging: false,
+    prevHtmlWidth: null, // the page's own inline html width, restored on hide
+  });
+
+  const clampWidth = (w) =>
+    Math.round(Math.min(Math.max(w, MIN_WIDTH), Math.max(MIN_WIDTH, window.innerWidth * MAX_FRACTION)));
+
+  // Width of the page's vertical scrollbar. The sidebar is offset by this so
+  // the scrollbar stays visible at the far right instead of hidden beneath it.
+  function scrollbarWidth() {
+    const docEl = document.documentElement;
+    const pushed = S.mode === 'push' && S.host ? S.width : 0;
+    return Math.min(30, Math.max(0, window.innerWidth - docEl.clientWidth - pushed));
+  }
+
+  const CSS = `
+    :host { all: initial; }
+    * { box-sizing: border-box; }
+    .panel {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: #ffffff;
+      color: #1a1a1a;
+      border-left: 1px solid rgba(0, 0, 0, 0.14);
+      font: 13px system-ui, "Segoe UI", sans-serif;
+    }
+    .panel.overlay { box-shadow: -6px 0 24px rgba(0, 0, 0, 0.18); }
+    .handle {
+      position: absolute;
+      left: -3px;
+      top: 0;
+      bottom: 0;
+      width: 8px;
+      cursor: ew-resize;
+      z-index: 2;
+    }
+    .handle::after {
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 50%;
+      width: 2px;
+      height: 36px;
+      margin-top: -18px;
+      border-radius: 2px;
+      background: rgba(0, 0, 0, 0.18);
+      transition: background 120ms;
+    }
+    .handle:hover::after, .panel.dragging .handle::after { background: #d43c32; }
+    .panel.dragging .handle { cursor: ew-resize; }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 38px;
+      padding: 0 6px 0 10px;
+      flex-shrink: 0;
+      background: linear-gradient(45deg, #d43c32, #a01e5a);
+      color: #fff;
+    }
+    header img { width: 18px; height: 18px; flex-shrink: 0; }
+    header .title {
+      flex: 1;
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    header button {
+      all: unset;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      color: #fff;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    header button:hover { background: rgba(255, 255, 255, 0.18); }
+    header button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+    iframe {
+      flex: 1;
+      width: 100%;
+      border: 0;
+      display: block;
+      background: transparent;
+      color-scheme: light dark;
+    }
+    .shield {
+      position: fixed;
+      inset: 0;
+      cursor: ew-resize;
+      z-index: 3;
+    }
+    @media (prefers-color-scheme: dark) {
+      .panel { background: #1f1f1f; color: #eee; border-left-color: rgba(255, 255, 255, 0.16); }
+      .panel.overlay { box-shadow: -6px 0 24px rgba(0, 0, 0, 0.5); }
+      .handle::after { background: rgba(255, 255, 255, 0.28); }
+    }
+  `;
+
+  const ICON_PUSH =
+    '<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="9.5" y1="2.5" x2="9.5" y2="13.5"/><polyline points="6.5,6 4.5,8 6.5,10"/></svg>';
+  const ICON_OVERLAY =
+    '<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><rect x="8" y="4.5" width="5" height="7" rx="1" fill="currentColor" stroke="none" opacity="0.85"/></svg>';
+  const ICON_CLOSE =
+    '<svg viewBox="0 0 16 16"><line x1="3.5" y1="3.5" x2="12.5" y2="12.5"/><line x1="12.5" y1="3.5" x2="3.5" y2="12.5"/></svg>';
+
+  function build() {
+    const host = document.createElement('div');
+    host.id = ID;
+    const root = host.attachShadow({ mode: 'open' });
+
+    const style = document.createElement('style');
+    style.textContent = CSS;
+
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+
+    const handle = document.createElement('div');
+    handle.className = 'handle';
+    handle.title = 'Drag to resize';
+
+    const header = document.createElement('header');
+    const icon = document.createElement('img');
+    icon.src = chrome.runtime.getURL('icons/icon48.png');
+    icon.alt = '';
+    const title = document.createElement('span');
+    title.className = 'title';
+    title.textContent = 'PDF Voice Reader';
+    const modeBtn = document.createElement('button');
+    modeBtn.className = 'mode';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'close';
+    closeBtn.title = 'Close sidebar (or click the extension icon)';
+    closeBtn.innerHTML = ICON_CLOSE;
+    header.append(icon, title, modeBtn, closeBtn);
+
+    const frame = document.createElement('iframe');
+    frame.allow = 'autoplay';
+
+    panel.append(handle, header, frame);
+    root.append(style, panel);
+
+    S.host = host;
+    S.root = root;
+    S.frame = frame;
+    S.panel = panel;
+    S.modeBtn = modeBtn;
+
+    handle.addEventListener('pointerdown', startDrag);
+    closeBtn.addEventListener('click', () => {
+      chrome.runtime.sendMessage({ target: 'sw', type: 'sidebar-close' }).catch(() => {});
+    });
+    modeBtn.addEventListener('click', () => {
+      const mode = S.mode === 'push' ? 'overlay' : 'push';
+      chrome.storage.local.set({ sidebarMode: mode });
+      applyMode(mode);
+    });
+
+    return host;
+  }
+
+  // Inline !important styles so page CSS targeting divs can't reposition us.
+  function styleHost() {
+    const st = S.host.style;
+    const set = (k, v) => st.setProperty(k, v, 'important');
+    set('all', 'initial');
+    set('position', 'fixed');
+    set('top', '0');
+    set('right', `${scrollbarWidth()}px`);
+    set('height', '100vh');
+    set('width', `${S.width}px`);
+    set('z-index', '2147483647');
+    set('display', 'block');
+    set('margin', '0');
+    set('padding', '0');
+  }
+
+  function applyPush() {
+    const docEl = document.documentElement;
+    if (S.mode === 'push') {
+      if (S.prevHtmlWidth === null) S.prevHtmlWidth = docEl.style.width || '';
+      docEl.style.setProperty('width', `calc(100% - ${S.width}px)`, 'important');
+    } else if (S.prevHtmlWidth !== null) {
+      docEl.style.width = S.prevHtmlWidth;
+      S.prevHtmlWidth = null;
+    }
+  }
+
+  function applyMode(mode) {
+    S.mode = mode === 'overlay' ? 'overlay' : 'push';
+    if (!S.host) return;
+    S.panel.classList.toggle('overlay', S.mode === 'overlay');
+    S.modeBtn.innerHTML = S.mode === 'push' ? ICON_PUSH : ICON_OVERLAY;
+    S.modeBtn.title =
+      S.mode === 'push' ? 'Page is pushed aside — click to float over it' : 'Floating over page — click to push page aside';
+    applyPush();
+    styleHost();
+  }
+
+  function applyWidth(width) {
+    S.width = clampWidth(width);
+    if (!S.host) return;
+    applyPush();
+    styleHost();
+  }
+
+  // ---------- drag to resize ----------
+
+  function startDrag(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    S.dragging = true;
+    S.panel.classList.add('dragging');
+    const shield = document.createElement('div');
+    shield.className = 'shield';
+    S.root.append(shield);
+    const sb = scrollbarWidth();
+    const rightEdge = window.innerWidth - sb;
+
+    const move = (ev) => applyWidth(rightEdge - ev.clientX);
+    const end = () => {
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', end, true);
+      window.removeEventListener('pointercancel', end, true);
+      shield.remove();
+      S.panel.classList.remove('dragging');
+      S.dragging = false;
+      chrome.storage.local.set({ sidebarWidth: S.width });
+    };
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', end, true);
+    window.addEventListener('pointercancel', end, true);
+  }
+
+  // ---------- show / hide ----------
+
+  function show({ tabId, width, mode }) {
+    S.tabId = tabId;
+    if (typeof width === 'number') S.width = clampWidth(width);
+    S.mode = mode === 'overlay' ? 'overlay' : 'push';
+    if (!S.host) {
+      build();
+      (document.body || document.documentElement).appendChild(S.host);
+      const src = new URL(chrome.runtime.getURL('popup/popup.html'));
+      src.searchParams.set('embed', '1');
+      if (tabId != null) src.searchParams.set('tabId', String(tabId));
+      S.frame.src = src.href;
+    } else if (!S.host.isConnected) {
+      (document.body || document.documentElement).appendChild(S.host);
+    }
+    applyMode(S.mode);
+    applyWidth(S.width);
+  }
+
+  function hide() {
+    if (!S.host) return;
+    S.host.remove();
+    const docEl = document.documentElement;
+    if (S.prevHtmlWidth !== null) {
+      docEl.style.width = S.prevHtmlWidth;
+      S.prevHtmlWidth = null;
+    }
+    S.host = null;
+    S.frame = null;
+    S.root = null;
+  }
+
+  // ---------- wiring ----------
+
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.target !== 'sidebar') return;
+    if (msg.type === 'show') show(msg);
+    else if (msg.type === 'hide') hide();
+    sendResponse({ visible: !!S.host, width: S.width, mode: S.mode });
+  });
+
+  // Keep width/mode in step with other tabs where the user resized or toggled.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !S.host || S.dragging) return;
+    if (changes.sidebarMode) applyMode(changes.sidebarMode.newValue);
+    if (changes.sidebarWidth && typeof changes.sidebarWidth.newValue === 'number') {
+      applyWidth(changes.sidebarWidth.newValue);
+    }
+  });
+
+  window.addEventListener('resize', () => {
+    if (S.host && !S.dragging) applyWidth(S.width);
+  });
+})();
