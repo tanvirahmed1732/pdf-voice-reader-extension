@@ -19,14 +19,17 @@
 
     <section id="player-section" hidden>
       <div class="player-row">
-        <button id="pg-play" class="primary player-btn">▶ Play</button>
-        <button id="pg-stop" class="player-btn" disabled>⏹</button>
+        <button id="pg-play" class="primary player-btn"><span class="ico">▶</span> <span class="lbl">Play</span></button>
+        <button id="pg-stop" class="player-btn" disabled title="Stop"><span class="ico">⏹</span> <span class="lbl">Stop</span></button>
       </div>
       <div class="player-controls">
-        <label for="pg-voice">Voice</label>
-        <select id="pg-voice"></select>
-        <label for="pg-rate">Speed</label>
-        <div class="rate-group">
+        <div class="field field-voice">
+          <label for="pg-voice">Voice</label>
+          <select id="pg-voice"></select>
+        </div>
+        <div class="field field-rate">
+          <label for="pg-rate">Speed</label>
+          <div class="rate-group">
           <button id="pg-rate-down" type="button" title="Slower (−0.05×)">−</button>
           <select id="pg-rate">
             <option value="0.5">0.5×</option>
@@ -38,6 +41,7 @@
             <option value="2">2×</option>
           </select>
           <button id="pg-rate-up" type="button" title="Faster (+0.05×)">+</button>
+          </div>
         </div>
       </div>
       <p id="pg-status" class="hint"></p>
