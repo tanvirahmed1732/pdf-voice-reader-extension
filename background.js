@@ -1,4 +1,4 @@
-// Service worker: routes messages between the popup (controls), the content
+// Service worker: routes messages between the side panel (controls), the content
 // script (text extraction + on-page highlighting), and the offscreen document
 // (TTS engines + audio), and tracks the single active reading session.
 
@@ -8,6 +8,16 @@ import { ensureEdgeTtsHeaders } from './tts/edge-dnr.js';
 ensureEdgeTtsHeaders();
 chrome.runtime.onInstalled.addListener(() => ensureEdgeTtsHeaders());
 chrome.runtime.onStartup.addListener(() => ensureEdgeTtsHeaders());
+
+// The controls live in a side panel (popup/popup.html) instead of a popup.
+// It starts hidden; clicking the toolbar icon opens it, and clicking the icon
+// again closes it. Chrome handles the toggle once this behavior is set.
+function enableSidePanelToggle() {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+}
+enableSidePanelToggle();
+chrome.runtime.onInstalled.addListener(enableSidePanelToggle);
+chrome.runtime.onStartup.addListener(enableSidePanelToggle);
 
 let session = null; // {tabId, status: 'playing'|'paused', k, total, note}
 
