@@ -432,6 +432,13 @@ try {
   check('mode button hands off to Chrome side panel', handedOff && modeNow === 'panel', `mode=${modeNow}`);
   const behavior = await webPopup.evaluate(async () => (await chrome.sidePanel.getPanelBehavior()).openPanelOnActionClick);
   check('icon toggles Chrome panel natively in panel mode', behavior === true);
+  // The panel must actually open on that click (sidePanel.open needs the
+  // gesture, which only covers the worker's handler up to its first await).
+  const panelOpened = await webPopup
+    .waitForFunction(async () => (await chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'] })).length > 0, null, { timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  check('Chrome side panel opens immediately on hand-off', panelOpened);
 
   // Panel → in-page (the button inside Chrome's panel sends this).
   const back = await webPopup.evaluate(async (tabId) => {
