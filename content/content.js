@@ -263,16 +263,25 @@
     window.addEventListener(evt, () => (S.userScrolledAt = performance.now()), { passive: true });
   }
 
-  // Space toggles pause/resume while reading (same as the PDF reader). Ignored
-  // when typing in a field; prevents the default page-scroll so it doesn't fight.
+  // Keyboard while reading (same bindings as the PDF reader): Space toggles
+  // pause/resume, ←/→ jump to the previous/next sentence. Ignored when typing
+  // in a field or when a modifier is held (Alt+← is browser Back, etc.);
+  // prevents the default page-scroll so it doesn't fight.
+  const KEY_ACTIONS = {
+    Space: { type: 'content-toggle' },
+    ArrowLeft: { type: 'content-skip', delta: -1 },
+    ArrowRight: { type: 'content-skip', delta: 1 },
+  };
   document.addEventListener(
     'keydown',
     (e) => {
-      if (!S.active || e.code !== 'Space') return;
+      if (!S.active) return;
+      const action = KEY_ACTIONS[e.code];
+      if (!action || e.altKey || e.ctrlKey || e.metaKey) return;
       const t = e.target;
       if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
       e.preventDefault();
-      chrome.runtime.sendMessage({ target: 'sw', type: 'content-toggle' });
+      chrome.runtime.sendMessage({ target: 'sw', ...action });
     },
     true,
   );
