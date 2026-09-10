@@ -14,7 +14,7 @@ Chrome extension that reads PDFs — and any web page — aloud with live word-b
   - *System voices* (Web Speech API) — instant, offline, uses everything installed on your OS
   - *Neural voices* (Piper, ONNX in WebAssembly) — one-time ~64 MB model download, then fully offline. Only medium-quality models are offered: "high" models synthesize at ~0.3× realtime on single-threaded WASM (MV3 CSP forbids ort's thread pool, which spawns blob: workers), while medium models run ~3× realtime and read smoothly
 - **Controls** — play/pause/resume/stop, speed 0.5×–2× (pitch-preserving for neural voices), skip sentence ⏮/⏭, click any text to jump the reading position
-- **Keyboard** — `Space` play/pause, `←`/`→` skip sentence
+- **Keyboard** — `Space` play/pause, `←` previous sentence, `→` next sentence — in the PDF reader, on web pages read in place, and while the popup is focused
 - **Persistence** — voice and speed are remembered across sessions
 
 ## Install (unpacked)
@@ -46,7 +46,7 @@ npm run build:piper    # re-bundle the neural TTS layer after upgrading TTS pack
 
 ```
 node scripts/make-test-pdf.mjs   # generate test/test.pdf (once)
-node scripts/e2e-smoke.mjs       # full UI smoke test in Playwright Chromium (17 checks)
+node scripts/e2e-smoke.mjs       # full UI smoke test in Playwright Chromium (40 checks)
 node scripts/e2e-neural.mjs      # deep neural-path test (downloads a ~64 MB voice model)
 ```
 
