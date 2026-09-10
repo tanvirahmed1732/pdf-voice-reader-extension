@@ -9,15 +9,96 @@ ensureEdgeTtsHeaders();
 chrome.runtime.onInstalled.addListener(() => ensureEdgeTtsHeaders());
 chrome.runtime.onStartup.addListener(() => ensureEdgeTtsHeaders());
 
-// The controls live in a side panel (popup/popup.html) instead of a popup.
-// It starts hidden; clicking the toolbar icon opens it, and clicking the icon
-// again closes it. Chrome handles the toggle once this behavior is set.
-function enableSidePanelToggle() {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+// ---------- sidebar ----------
+//
+// On web pages the controls (popup/popup.html) live in an in-page sidebar
+// injected by content/sidebar.js — Chrome's own side panel can't shrink below
+// ~320px, the in-page one resizes freely. On tabs where scripts can't run
+// (PDF viewer, chrome:// pages) the toolbar icon falls back to Chrome's side
+// panel instead. The sidebar starts hidden; the icon toggles it, and while
+// open it follows the active tab across switches and navigations.
+
+const SIDEBAR_KEY = 'sidebarOpen'; // chrome.storage.session — hidden again after a restart
+
+// We open Chrome's panel ourselves (only as a fallback), so keep Chrome from
+// also opening it on every icon click.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+
+function isWebPage(url) {
+  try {
+    const u = new URL(url ?? '');
+    if (!['http:', 'https:'].includes(u.protocol)) return false;
+    return !u.pathname.toLowerCase().endsWith('.pdf');
+  } catch {
+    return false;
+  }
 }
-enableSidePanelToggle();
-chrome.runtime.onInstalled.addListener(enableSidePanelToggle);
-chrome.runtime.onStartup.addListener(enableSidePanelToggle);
+
+async function sidebarIsOpen() {
+  return !!(await chrome.storage.session.get(SIDEBAR_KEY))[SIDEBAR_KEY];
+}
+
+async function showSidebar(tabId) {
+  const { sidebarWidth, sidebarMode } = await chrome.storage.local.get(['sidebarWidth', 'sidebarMode']);
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content/sidebar.js'] });
+    await chrome.tabs.sendMessage(tabId, {
+      target: 'sidebar',
+      type: 'show',
+      tabId,
+      width: sidebarWidth,
+      mode: sidebarMode,
+    });
+    return true;
+  } catch {
+    return false; // page refuses scripts (store pages, etc.)
+  }
+}
+
+function hideSidebar(tabId) {
+  return chrome.tabs.sendMessage(tabId, { target: 'sidebar', type: 'hide' }).catch(() => {});
+}
+
+async function hideSidebarEverywhere() {
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(tabs.filter((t) => isWebPage(t.url)).map((t) => hideSidebar(t.id)));
+}
+
+async function setSidebarOpen(open, tabId) {
+  await chrome.storage.session.set({ [SIDEBAR_KEY]: open });
+  if (open) {
+    if (tabId != null) await showSidebar(tabId);
+  } else {
+    await hideSidebarEverywhere();
+  }
+}
+
+async function toggleSidebar(tab) {
+  const open = !(await sidebarIsOpen());
+  await setSidebarOpen(open, tab.id);
+  return open;
+}
+
+chrome.action.onClicked.addListener(async (tab) => {
+  if (isWebPage(tab.url)) {
+    await toggleSidebar(tab);
+  } else {
+    // PDF viewer / browser page: scripts can't run there, use Chrome's panel.
+    await chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+  }
+});
+
+// Follow the user: an open sidebar appears on whichever web tab is active,
+// and comes back after a navigation wipes the injected DOM.
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  if (!(await sidebarIsOpen())) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (tab && isWebPage(tab.url)) showSidebar(tabId);
+});
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'complete' || !tab.active || !isWebPage(tab.url)) return;
+  if (await sidebarIsOpen()) showSidebar(tabId);
+});
 
 let session = null; // {tabId, status: 'playing'|'paused', k, total, note}
 
@@ -177,9 +258,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ state: session });
           break;
         case 'ui-skip':
-          // ←/→ pressed while the popup has focus.
+          // ←/→ pressed while the sidebar has focus.
           await skipSession(msg.delta);
           sendResponse({ state: session });
+          break;
+        case 'sidebar-close':
+          // ✕ in the sidebar header.
+          await setSidebarOpen(false);
+          sendResponse({ open: false });
+          break;
+        case 'sidebar-toggle':
+          // Same as clicking the toolbar icon on a web tab (used by tests).
+          sendResponse({ open: await toggleSidebar(await chrome.tabs.get(msg.tabId)) });
           break;
         default:
           sendResponse({});
