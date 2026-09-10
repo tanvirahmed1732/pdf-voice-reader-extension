@@ -11,18 +11,34 @@ chrome.runtime.onStartup.addListener(() => ensureEdgeTtsHeaders());
 
 // ---------- sidebar ----------
 //
-// On web pages the controls (popup/popup.html) live in an in-page sidebar
-// injected by content/sidebar.js — Chrome's own side panel can't shrink below
-// ~320px, the in-page one resizes freely. On tabs where scripts can't run
-// (PDF viewer, chrome:// pages) the toolbar icon falls back to Chrome's side
-// panel instead. The sidebar starts hidden; the icon toggles it, and while
-// open it follows the active tab across switches and navigations.
+// The controls (popup/popup.html) have three hosts, chosen by the persisted
+// sidebarMode and cycled by the header button:
+//   push / float — an in-page sidebar or floating window injected by
+//                  content/sidebar.js (Chrome's own side panel can't shrink
+//                  below ~320px; the in-page one resizes freely)
+//   panel        — Chrome's built-in side panel; Chrome toggles it natively
+//                  on icon clicks (openPanelOnActionClick)
+// In push/float, tabs where scripts can't run (PDF viewer, chrome:// pages)
+// fall back to Chrome's panel. Everything starts hidden; the icon toggles it,
+// and while open the in-page sidebar follows the active tab across switches
+// and navigations.
 
 const SIDEBAR_KEY = 'sidebarOpen'; // chrome.storage.session — hidden again after a restart
 
-// We open Chrome's panel ourselves (only as a fallback), so keep Chrome from
-// also opening it on every icon click.
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+async function sidebarMode() {
+  const { sidebarMode } = await chrome.storage.local.get('sidebarMode');
+  return sidebarMode === 'panel' || sidebarMode === 'float' ? sidebarMode : 'push';
+}
+
+// Chrome toggles its panel on icon clicks only in panel mode; otherwise we
+// open it ourselves as the fallback.
+async function applyPanelBehavior() {
+  const panel = (await sidebarMode()) === 'panel';
+  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: panel }).catch(() => {});
+}
+applyPanelBehavior();
+chrome.runtime.onInstalled.addListener(applyPanelBehavior);
+chrome.runtime.onStartup.addListener(applyPanelBehavior);
 
 function isWebPage(url) {
   try {
@@ -84,7 +100,33 @@ async function toggleSidebar(tab) {
   return open;
 }
 
+// Switch hosts. 'panel' comes from the in-page header button (its click is
+// the user gesture Chrome requires to open the panel); 'push' comes from the
+// button inside Chrome's panel, which then closes itself.
+async function setSidebarMode(mode, { windowId } = {}) {
+  if (mode === 'panel') {
+    await chrome.storage.local.set({ sidebarMode: 'panel' });
+    await chrome.storage.session.set({ [SIDEBAR_KEY]: false });
+    await hideSidebarEverywhere();
+    await applyPanelBehavior();
+    if (windowId != null) await chrome.sidePanel.open({ windowId }).catch(() => {});
+    return { ok: true };
+  }
+  await chrome.storage.local.set({ sidebarMode: mode === 'float' ? 'float' : 'push' });
+  await applyPanelBehavior();
+  const [tab] =
+    windowId != null
+      ? await chrome.tabs.query({ active: true, windowId })
+      : await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab || !isWebPage(tab.url)) {
+    return { ok: false, error: 'Switch to a normal web page first — the in-page sidebar cannot open on this tab.' };
+  }
+  await setSidebarOpen(true, tab.id);
+  return { ok: true };
+}
+
 chrome.action.onClicked.addListener(async (tab) => {
+  if ((await sidebarMode()) === 'panel') return; // Chrome toggles its panel itself
   if (isWebPage(tab.url)) {
     await toggleSidebar(tab);
   } else {
@@ -275,6 +317,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'sidebar-toggle':
           // Same as clicking the toolbar icon on a web tab (used by tests).
           sendResponse({ open: await toggleSidebar(await chrome.tabs.get(msg.tabId)) });
+          break;
+        case 'sidebar-mode':
+          sendResponse(await setSidebarMode(msg.mode, { windowId: msg.windowId ?? sender.tab?.windowId }));
           break;
         default:
           sendResponse({});
