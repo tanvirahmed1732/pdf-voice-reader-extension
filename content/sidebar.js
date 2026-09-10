@@ -24,6 +24,7 @@
     mode: 'push',
     tabId: null,
     dragging: false,
+    dragRight: null, // right offset frozen for the duration of a drag
     prevHtmlWidth: null, // the page's own inline html width, restored on hide
   });
 
@@ -47,6 +48,7 @@
       height: 100%;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
       background: #ffffff;
       color: #1a1a1a;
       border-left: 1px solid rgba(0, 0, 0, 0.14);
@@ -76,6 +78,7 @@
     }
     .handle:hover::after, .panel.dragging .handle::after { background: #d43c32; }
     .panel.dragging .handle { cursor: ew-resize; }
+    .panel.dragging iframe { pointer-events: none; }
     header {
       display: flex;
       align-items: center;
@@ -117,6 +120,8 @@
     iframe {
       flex: 1;
       width: 100%;
+      max-width: none;
+      align-self: flex-start;
       border: 0;
       display: block;
       background: transparent;
@@ -198,19 +203,28 @@
   }
 
   // Inline !important styles so page CSS targeting divs can't reposition us.
-  function styleHost() {
+  // Static part runs once; geometry is updated separately so a resize touches
+  // only width/right instead of resetting every property.
+  function styleHostStatic() {
     const st = S.host.style;
     const set = (k, v) => st.setProperty(k, v, 'important');
     set('all', 'initial');
     set('position', 'fixed');
     set('top', '0');
-    set('right', `${scrollbarWidth()}px`);
     set('height', '100vh');
-    set('width', `${S.width}px`);
     set('z-index', '2147483647');
     set('display', 'block');
     set('margin', '0');
     set('padding', '0');
+  }
+
+  function styleHostGeometry() {
+    const st = S.host.style;
+    // While dragging, the right offset is frozen: pushing the page can add or
+    // remove its scrollbar mid-drag, which would otherwise nudge the sidebar.
+    const right = S.dragging ? S.dragRight : scrollbarWidth();
+    st.setProperty('right', `${right}px`, 'important');
+    st.setProperty('width', `${S.width}px`, 'important');
   }
 
   function applyPush() {
@@ -232,7 +246,7 @@
     S.modeBtn.title =
       S.mode === 'push' ? 'Page is pushed aside — click to float over it' : 'Floating over page — click to push page aside';
     applyPush();
-    styleHost();
+    styleHostGeometry();
   }
 
   function applyWidth(width) {
@@ -243,35 +257,72 @@
     S.panel.classList.toggle('compact', S.width < 200);
     S.panel.classList.toggle('micro', S.width < 120);
     applyPush();
-    styleHost();
+    styleHostGeometry();
   }
 
   // ---------- drag to resize ----------
+  //
+  // Smoothness rules: the iframe is a cross-process frame, so resizing it on
+  // every mouse move repaints asynchronously and flickers — its width is
+  // frozen for the drag and clipped by the panel, then set once on release
+  // (which is also the only moment its responsive breakpoints re-evaluate).
+  // Width updates are coalesced to one per animation frame, and the pointer
+  // is captured by the handle so the page and iframe never see the drag.
 
   function startDrag(e) {
     if (e.button !== 0) return;
     e.preventDefault();
+    const handle = e.currentTarget;
+    try {
+      handle.setPointerCapture(e.pointerId);
+    } catch {
+      // capture unsupported — window listeners below still work
+    }
     S.dragging = true;
+    S.dragRight = scrollbarWidth();
     S.panel.classList.add('dragging');
     const shield = document.createElement('div');
     shield.className = 'shield';
     S.root.append(shield);
-    const sb = scrollbarWidth();
-    const rightEdge = window.innerWidth - sb;
 
-    const move = (ev) => applyWidth(rightEdge - ev.clientX);
-    const end = () => {
-      window.removeEventListener('pointermove', move, true);
+    const rightEdge = window.innerWidth - S.dragRight;
+    S.frame.style.width = `${S.width}px`;
+    let raf = 0;
+    let nextWidth = S.width;
+
+    const move = (ev) => {
+      nextWidth = rightEdge - ev.clientX;
+      if (!raf) {
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          applyWidth(nextWidth);
+        });
+      }
+    };
+    const end = (ev) => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
       window.removeEventListener('pointerup', end, true);
-      window.removeEventListener('pointercancel', end, true);
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      try {
+        handle.releasePointerCapture(ev.pointerId);
+      } catch {
+        // already released
+      }
       shield.remove();
       S.panel.classList.remove('dragging');
       S.dragging = false;
+      S.dragRight = null;
+      S.frame.style.width = '';
+      applyWidth(nextWidth);
       chrome.storage.local.set({ sidebarWidth: S.width });
     };
-    window.addEventListener('pointermove', move, true);
-    window.addEventListener('pointerup', end, true);
-    window.addEventListener('pointercancel', end, true);
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+    window.addEventListener('pointerup', end, true); // safety net if capture was refused
   }
 
   // ---------- show / hide ----------
@@ -282,6 +333,7 @@
     S.mode = mode === 'overlay' ? 'overlay' : 'push';
     if (!S.host) {
       build();
+      styleHostStatic();
       (document.body || document.documentElement).appendChild(S.host);
       const src = new URL(chrome.runtime.getURL('popup/popup.html'));
       src.searchParams.set('embed', '1');
