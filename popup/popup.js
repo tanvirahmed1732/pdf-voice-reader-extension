@@ -18,6 +18,7 @@ const rateSel = document.getElementById('pg-rate');
 const rateDownBtn = document.getElementById('pg-rate-down');
 const rateUpBtn = document.getElementById('pg-rate-up');
 const statusEl = document.getElementById('pg-status');
+const modeInPageBtn = document.getElementById('mode-inpage');
 
 let tab = null; // the tab the panel currently controls
 let settings = null;
@@ -368,6 +369,17 @@ async function init() {
 
   openSettingsBtn.addEventListener('click', () => {
     chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
+  });
+
+  // Chrome side panel → in-page sidebar. The worker injects the sidebar on
+  // this window's active tab; this panel then closes itself.
+  modeInPageBtn.addEventListener('click', async () => {
+    const resp = await sw({ type: 'sidebar-mode', mode: 'push', windowId: panelWindowId }).catch(() => null);
+    if (resp?.ok) {
+      window.close();
+    } else {
+      currentHint.textContent = resp?.error ?? 'Could not open the in-page sidebar.';
+    }
   });
 
   watchTabs();
