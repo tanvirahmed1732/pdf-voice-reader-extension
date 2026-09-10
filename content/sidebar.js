@@ -11,7 +11,7 @@
 (() => {
   if (window.__pdfVoiceReaderSidebar) return; // already injected — listener persists
 
-  const MIN_WIDTH = 160;
+  const MIN_WIDTH = 44; // just the close button and drag grip
   const MAX_FRACTION = 0.9; // of the viewport
   const DEFAULT_WIDTH = 320;
   const ID = 'pvr-sidebar-host';
@@ -87,6 +87,10 @@
       color: #fff;
     }
     header img { width: 18px; height: 18px; flex-shrink: 0; }
+    .compact header .title { display: none; }
+    .compact header { padding-left: 8px; }
+    .micro header { padding: 0 4px; justify-content: center; }
+    .micro header img, .micro header .mode { display: none; }
     header .title {
       flex: 1;
       min-width: 0;
@@ -234,6 +238,10 @@
   function applyWidth(width) {
     S.width = clampWidth(width);
     if (!S.host) return;
+    // Header trims itself as the sidebar narrows: title goes first, then the
+    // icon and mode button, leaving just ✕ at the minimum width.
+    S.panel.classList.toggle('compact', S.width < 200);
+    S.panel.classList.toggle('micro', S.width < 120);
     applyPush();
     styleHost();
   }
