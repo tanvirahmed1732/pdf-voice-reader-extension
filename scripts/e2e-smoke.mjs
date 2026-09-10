@@ -337,6 +337,35 @@ try {
     .catch(() => false);
   check('sidebar width follows stored value', resized, await web.evaluate(() => document.getElementById('pvr-sidebar-host')?.style.width));
 
+  // Real pointer drag on the handle: width follows the mouse, the iframe is
+  // frozen during the drag (no per-frame cross-process resize) and restored
+  // to full width on release, and the result is persisted.
+  const geom = await web.evaluate(() => {
+    const r = document.getElementById('pvr-sidebar-host').getBoundingClientRect();
+    return { left: r.left, top: r.top, height: r.height };
+  });
+  const y = geom.top + geom.height / 2;
+  await web.mouse.move(geom.left + 1, y);
+  await web.mouse.down();
+  await web.mouse.move(geom.left - 40, y, { steps: 4 });
+  const midDrag = await web.evaluate(() => {
+    const host = document.getElementById('pvr-sidebar-host');
+    const frame = host.shadowRoot.querySelector('iframe');
+    return { hostW: host.style.width, frameW: frame.style.width };
+  });
+  check('drag freezes iframe width mid-drag', midDrag.frameW === '200px', `frame=${midDrag.frameW}`);
+  await web.mouse.move(geom.left - 100, y, { steps: 6 });
+  await web.mouse.up();
+  const afterDrag = await web.evaluate(() => {
+    const host = document.getElementById('pvr-sidebar-host');
+    const frame = host.shadowRoot.querySelector('iframe');
+    return { hostW: parseInt(host.style.width, 10), frameW: frame.style.width, dragging: host.shadowRoot.querySelector('.panel').classList.contains('dragging') };
+  });
+  check('drag widens sidebar by the mouse travel', Math.abs(afterDrag.hostW - 300) <= 2 && !afterDrag.dragging, `width=${afterDrag.hostW}`);
+  check('iframe back to full width after drag', afterDrag.frameW === '');
+  const storedW = await webPopup.evaluate(async () => (await chrome.storage.local.get('sidebarWidth')).sidebarWidth);
+  check('dragged width persisted', storedW === afterDrag.hostW, `stored=${storedW}`);
+
   // Overlay mode leaves the page at full width.
   await webPopup.evaluate(() => chrome.storage.local.set({ sidebarMode: 'overlay' }));
   const overlay = await web
