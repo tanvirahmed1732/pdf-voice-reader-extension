@@ -5,7 +5,10 @@
 }
 
 body {
-  width: 320px;
+  min-width: 280px;
+  max-width: 100%;
+  min-height: 100vh;
+  box-sizing: border-box;
   margin: 0;
   font-family: system-ui, "Segoe UI", sans-serif;
   font-size: 14px;
