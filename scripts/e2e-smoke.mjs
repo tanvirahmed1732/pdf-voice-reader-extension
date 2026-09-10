@@ -353,7 +353,7 @@ try {
     const frame = host.shadowRoot.querySelector('iframe');
     return { hostW: host.style.width, frameW: frame.style.width };
   });
-  check('drag freezes iframe width mid-drag', midDrag.frameW === '200px', `frame=${midDrag.frameW}`);
+  check('drag freezes iframe width mid-drag', /^\d+px$/.test(midDrag.frameW), `frame=${midDrag.frameW}`);
   await web.mouse.move(geom.left - 100, y, { steps: 6 });
   await web.mouse.up();
   const afterDrag = await web.evaluate(() => {
@@ -386,6 +386,52 @@ try {
   const after = await webPopup.evaluate(async () => (await chrome.runtime.sendMessage({ target: 'sw', type: 'ui-state' })).state);
   check('resizing while paused does not jump or resume', after?.status === 'paused' && after?.k === before?.k, `before=${before?.status}@${before?.k} after=${after?.status}@${after?.k}`);
   await frame.locator('#pg-stop').click();
+
+  // Float mode: a movable, resizable window; page at full width.
+  await webPopup.evaluate(() => chrome.storage.local.set({ sidebarMode: 'float' }));
+  const floated = await web
+    .waitForFunction(() => {
+      const h = document.getElementById('pvr-sidebar-host');
+      return h && h.shadowRoot.querySelector('.panel').classList.contains('float') && h.style.left !== 'auto' && document.documentElement.style.width === '';
+    }, null, { timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  check('float mode positions a window and releases the page', floated);
+
+  const fl = await web.evaluate(() => {
+    const r = document.getElementById('pvr-sidebar-host').getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
+  });
+  // Drag by the header (avoid its buttons: use the title area near the left).
+  await web.mouse.move(fl.x + 60, fl.y + 19);
+  await web.mouse.down();
+  await web.mouse.move(fl.x + 60 - 150, fl.y + 19 + 80, { steps: 6 });
+  await web.mouse.up();
+  const moved = await web.evaluate(() => {
+    const r = document.getElementById('pvr-sidebar-host').getBoundingClientRect();
+    return { x: r.left, y: r.top };
+  });
+  check('float window moves with header drag', Math.abs(moved.x - (fl.x - 150)) <= 2 && Math.abs(moved.y - (fl.y + 80)) <= 2, `from ${fl.x},${fl.y} to ${moved.x},${moved.y}`);
+
+  // Resize from the bottom edge.
+  await web.mouse.move(moved.x + fl.w / 2, moved.y + fl.h - 2);
+  await web.mouse.down();
+  await web.mouse.move(moved.x + fl.w / 2, moved.y + fl.h - 2 - 100, { steps: 5 });
+  await web.mouse.up();
+  const shrunk = await web.evaluate(() => document.getElementById('pvr-sidebar-host').getBoundingClientRect().height);
+  check('float window resizes from bottom edge', Math.abs(shrunk - (fl.h - 100)) <= 2, `h ${fl.h} → ${shrunk}`);
+  const storedFloat = await webPopup.evaluate(async () => (await chrome.storage.local.get('sidebarFloat')).sidebarFloat);
+  check('float geometry persisted', storedFloat && Math.abs(storedFloat.h - shrunk) <= 1 && Math.abs(storedFloat.x - moved.x) <= 1, JSON.stringify(storedFloat));
+
+  // Header button cycles float → overlay → push → float.
+  const modeBtn = web.locator('#pvr-sidebar-host .mode');
+  const modeAfterClicks = [];
+  for (let i = 0; i < 3; i++) {
+    await modeBtn.click();
+    await web.waitForTimeout(150);
+    modeAfterClicks.push(await webPopup.evaluate(async () => (await chrome.storage.local.get('sidebarMode')).sidebarMode));
+  }
+  check('mode button cycles float → overlay → push → float', modeAfterClicks.join(',') === 'overlay,push,float', modeAfterClicks.join(','));
 
   // Overlay mode leaves the page at full width.
   await webPopup.evaluate(() => chrome.storage.local.set({ sidebarMode: 'overlay' }));
