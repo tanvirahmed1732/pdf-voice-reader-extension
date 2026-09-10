@@ -229,14 +229,23 @@ async function initPlayer() {
   rateDownBtn.addEventListener('click', () => setRate(settings.rate - 0.05, true));
   rateUpBtn.addEventListener('click', () => setRate(settings.rate + 0.05, true));
 
-  // Space toggles play/pause even while the popup has focus (the page's own
-  // Space handler can't fire then). Ignored when a dropdown/field is focused.
-  document.addEventListener('keydown', (e) => {
-    if (e.code !== 'Space') return;
+  // Keyboard while the popup has focus (the page's own handlers can't fire
+  // then): Space toggles play/pause, ←/→ skip to the previous/next sentence.
+  // Ignored when a dropdown/field is focused.
+  document.addEventListener('keydown', async (e) => {
     const t = e.target;
     if (t && /^(SELECT|INPUT|TEXTAREA)$/.test(t.tagName)) return;
-    e.preventDefault();
-    playBtn.click();
+    if (e.code === 'Space') {
+      e.preventDefault();
+      playBtn.click();
+    } else if ((e.code === 'ArrowLeft' || e.code === 'ArrowRight') && state && state.tabId === tab.id) {
+      e.preventDefault();
+      const resp = await sw({ type: 'ui-skip', delta: e.code === 'ArrowLeft' ? -1 : 1 });
+      if (resp?.state) {
+        state = resp.state;
+        renderPlayerState();
+      }
+    }
   });
 
   // Live progress while the popup stays open.
