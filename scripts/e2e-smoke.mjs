@@ -251,6 +251,34 @@ try {
     .catch(() => false);
   check('Space in focused popup resumes reading', resumedFromPopup, `status=${await statusOf()}`);
 
+  // ←/→ on the page skip to the previous / next sentence.
+  const kOf = () => webPopup.evaluate(async () => (await chrome.runtime.sendMessage({ target: 'sw', type: 'ui-state' })).state?.k);
+  await web.locator('body').focus().catch(() => {});
+  const kBeforeRight = await kOf();
+  await web.keyboard.press('ArrowRight');
+  const advancedByArrow = await webPopup
+    .waitForFunction(async (k0) => (await chrome.runtime.sendMessage({ target: 'sw', type: 'ui-state' })).state?.k === k0 + 1, kBeforeRight, { timeout: 4000 })
+    .then(() => true)
+    .catch(() => false);
+  check('→ on page skips to next sentence', advancedByArrow, `k ${kBeforeRight} → ${await kOf()}`);
+  const kBeforeLeft = await kOf();
+  await web.keyboard.press('ArrowLeft');
+  const rewoundByArrow = await webPopup
+    .waitForFunction(async (k0) => (await chrome.runtime.sendMessage({ target: 'sw', type: 'ui-state' })).state?.k === k0 - 1, kBeforeLeft, { timeout: 4000 })
+    .then(() => true)
+    .catch(() => false);
+  check('← on page skips to previous sentence', rewoundByArrow, `k ${kBeforeLeft} → ${await kOf()}`);
+
+  // →  while the POPUP is focused also skips.
+  await webPopup.locator('body').click({ position: { x: 5, y: 5 } });
+  const kBeforePopupRight = await kOf();
+  await webPopup.keyboard.press('ArrowRight');
+  const advancedFromPopup = await webPopup
+    .waitForFunction(async (k0) => (await chrome.runtime.sendMessage({ target: 'sw', type: 'ui-state' })).state?.k === k0 + 1, kBeforePopupRight, { timeout: 4000 })
+    .then(() => true)
+    .catch(() => false);
+  check('→ in focused popup skips to next sentence', advancedFromPopup, `k ${kBeforePopupRight} → ${await kOf()}`);
+
   await webPopup.waitForFunction(
     () => /Pause|Reading/.test(document.getElementById('pg-play').textContent + document.getElementById('pg-status').textContent),
     null,
