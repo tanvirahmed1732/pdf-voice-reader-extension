@@ -4,11 +4,12 @@
 // below ~320px. Injected on demand by the service worker; classic script.
 //
 // Layout modes (persisted in chrome.storage.local as sidebarMode; the header
-// button cycles push → float → overlay → push):
-//   push    — sidebar; the page is narrowed so nothing sits behind it
-//   float   — a floating window: drag by its header, resize from its left
-//             edge, bottom edge or bottom-left corner (geometry in sidebarFloat)
-//   overlay — sidebar floating above the page
+// button cycles push → float → panel → push):
+//   push  — sidebar; the page is narrowed so nothing sits behind it
+//   float — a floating window: drag by its header, resize from its left
+//           edge, bottom edge or bottom-left corner (geometry in sidebarFloat)
+//   panel — Chrome's built-in side panel hosts the controls instead; this
+//           script is hidden and the service worker owns the switch
 // Sidebar width is persisted as sidebarWidth. Both are mirrored live into
 // other tabs.
 
@@ -20,8 +21,8 @@
   const MAX_FRACTION = 0.9; // of the viewport
   const DEFAULT_WIDTH = 320;
   const ID = 'pvr-sidebar-host';
-  const MODES = ['push', 'float', 'overlay'];
-  const NEXT_MODE = { push: 'float', float: 'overlay', overlay: 'push' };
+  const MODES = ['push', 'float']; // modes this script renders
+  const NEXT_MODE = { push: 'float', float: 'panel' };
 
   const S = (window.__pdfVoiceReaderSidebar = {
     host: null,
@@ -73,7 +74,6 @@
       border-left: 1px solid rgba(0, 0, 0, 0.14);
       font: 13px system-ui, "Segoe UI", sans-serif;
     }
-    .panel.overlay { box-shadow: -6px 0 24px rgba(0, 0, 0, 0.18); }
     .panel.float {
       border: 1px solid rgba(0, 0, 0, 0.18);
       border-radius: 10px;
@@ -178,7 +178,6 @@
     }
     @media (prefers-color-scheme: dark) {
       .panel { background: #1f1f1f; color: #eee; border-left-color: rgba(255, 255, 255, 0.16); }
-      .panel.overlay { box-shadow: -6px 0 24px rgba(0, 0, 0, 0.5); }
       .panel.float { border-color: rgba(255, 255, 255, 0.18); box-shadow: 0 10px 32px rgba(0, 0, 0, 0.6); }
       .handle::after { background: rgba(255, 255, 255, 0.28); }
     }
@@ -188,15 +187,12 @@
     '<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="9.5" y1="2.5" x2="9.5" y2="13.5"/><polyline points="6.5,6 4.5,8 6.5,10"/></svg>';
   const ICON_FLOAT =
     '<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><rect x="6" y="6" width="7" height="5.5" rx="1" fill="currentColor" stroke="none" opacity="0.85"/></svg>';
-  const ICON_OVERLAY =
-    '<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><rect x="8" y="4.5" width="5" height="7" rx="1" fill="currentColor" stroke="none" opacity="0.85"/></svg>';
   const ICON_CLOSE =
     '<svg viewBox="0 0 16 16"><line x1="3.5" y1="3.5" x2="12.5" y2="12.5"/><line x1="12.5" y1="3.5" x2="3.5" y2="12.5"/></svg>';
 
   const MODE_UI = {
     push: { icon: ICON_PUSH, title: 'Sidebar, page pushed aside — click to detach as a floating window' },
-    float: { icon: ICON_FLOAT, title: 'Floating window — click to dock as a sidebar over the page' },
-    overlay: { icon: ICON_OVERLAY, title: 'Sidebar over the page — click to push the page aside' },
+    float: { icon: ICON_FLOAT, title: "Floating window — click to move into Chrome's side panel" },
   };
 
   function build() {
@@ -259,6 +255,12 @@
     });
     modeBtn.addEventListener('click', () => {
       const mode = NEXT_MODE[S.mode] ?? 'push';
+      if (mode === 'panel') {
+        // Chrome's panel can only be opened on a user gesture, which carries
+        // through this message; the service worker hides us and opens it.
+        chrome.runtime.sendMessage({ target: 'sw', type: 'sidebar-mode', mode }).catch(() => {});
+        return;
+      }
       applyMode(mode);
       chrome.storage.local.set({ sidebarMode: mode });
     });
@@ -513,7 +515,10 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !S.host || S.dragging) return;
     if (changes.sidebarFloat && changes.sidebarFloat.newValue) S.float = normalizeFloat(changes.sidebarFloat.newValue);
-    if (changes.sidebarMode) applyMode(changes.sidebarMode.newValue);
+    if (changes.sidebarMode) {
+      if (changes.sidebarMode.newValue === 'panel') return hide(); // Chrome's panel took over
+      applyMode(changes.sidebarMode.newValue);
+    }
     if (changes.sidebarWidth && typeof changes.sidebarWidth.newValue === 'number') {
       applyWidth(changes.sidebarWidth.newValue);
     }
