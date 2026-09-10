@@ -39,7 +39,11 @@ async function sidebarIsOpen() {
 }
 
 async function showSidebar(tabId) {
-  const { sidebarWidth, sidebarMode } = await chrome.storage.local.get(['sidebarWidth', 'sidebarMode']);
+  const { sidebarWidth, sidebarMode, sidebarFloat } = await chrome.storage.local.get([
+    'sidebarWidth',
+    'sidebarMode',
+    'sidebarFloat',
+  ]);
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content/sidebar.js'] });
     await chrome.tabs.sendMessage(tabId, {
@@ -48,6 +52,7 @@ async function showSidebar(tabId) {
       tabId,
       width: sidebarWidth,
       mode: sidebarMode,
+      float: sidebarFloat,
     });
     return true;
   } catch {
