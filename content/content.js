@@ -288,7 +288,9 @@
 
   // Click-to-jump: while reading, click anywhere in the text to move the
   // reading position there (same as the PDF reader). Ignores clicks on links
-  // and controls, and never fires while the user is selecting text.
+  // and controls, anything inside our own sidebar (its drag handle sits over
+  // the page edge — resizing must never move the reading position), and
+  // never fires while the user is selecting text.
   document.addEventListener(
     'click',
     (e) => {
@@ -297,7 +299,7 @@
       if (sel && !sel.isCollapsed) return;
       if (
         e.target.closest &&
-        e.target.closest('a,button,input,select,textarea,label,[role="button"],[contenteditable]')
+        e.target.closest('#pvr-sidebar-host,a,button,input,select,textarea,label,[role="button"],[contenteditable]')
       ) {
         return;
       }
