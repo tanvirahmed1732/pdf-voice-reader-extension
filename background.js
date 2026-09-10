@@ -105,12 +105,25 @@ async function toggleSidebar(tab) {
 // button inside Chrome's panel, which then closes itself.
 async function setSidebarMode(mode, { windowId } = {}) {
   if (mode === 'panel') {
+    // Open FIRST, synchronously: the user gesture that arrived with the
+    // message only covers the handler up to its first await. Anything awaited
+    // before this call leaves the gesture scope and the open is refused.
+    let opened = true;
+    let error = null;
+    const opening =
+      windowId != null
+        ? chrome.sidePanel.open({ windowId }).catch((err) => {
+            opened = false;
+            error = err?.message ?? String(err);
+          })
+        : Promise.resolve();
     await chrome.storage.local.set({ sidebarMode: 'panel' });
     await chrome.storage.session.set({ [SIDEBAR_KEY]: false });
     await hideSidebarEverywhere();
     await applyPanelBehavior();
-    if (windowId != null) await chrome.sidePanel.open({ windowId }).catch(() => {});
-    return { ok: true };
+    await opening;
+    if (!opened) console.warn('sidePanel.open failed:', error);
+    return { ok: opened, error };
   }
   await chrome.storage.local.set({ sidebarMode: mode === 'float' ? 'float' : 'push' });
   await applyPanelBehavior();
