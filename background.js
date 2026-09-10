@@ -50,6 +50,22 @@ async function resumeSession() {
   await sendOffscreen({ type: 'resume' });
 }
 
+// Restart reading at sentence k (also un-pauses, like the PDF reader's skip).
+async function jumpSession(k) {
+  if (!session) return;
+  session.status = 'playing';
+  session.k = k;
+  sendContent(session.tabId, { type: 'hl-resume' });
+  await sendOffscreen({ type: 'jump', k });
+}
+
+// Move by delta sentences, clamped to the document bounds.
+async function skipSession(delta) {
+  if (!session || session.status === 'error') return;
+  const k = Math.min(Math.max(session.k + (delta | 0), 0), session.total - 1);
+  await jumpSession(k);
+}
+
 async function handleUiPlay(msg, sendResponse) {
   const { tabId } = msg;
   if (session) await stopSession();
@@ -142,13 +158,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           break;
         case 'content-jump':
           // Click-to-jump from the page: restart reading at the clicked sentence.
-          if (session && sender.tab && sender.tab.id === session.tabId) {
-            session.status = 'playing';
-            session.k = msg.k;
-            sendContent(session.tabId, { type: 'hl-resume' });
-            await sendOffscreen({ type: 'jump', k: msg.k });
-          }
+          if (session && sender.tab && sender.tab.id === session.tabId) await jumpSession(msg.k);
           sendResponse({});
+          break;
+        case 'content-skip':
+          // ←/→ pressed on the page: previous / next sentence.
+          if (session && sender.tab && sender.tab.id === session.tabId) await skipSession(msg.delta);
+          sendResponse({ state: session });
+          break;
+        case 'ui-skip':
+          // ←/→ pressed while the popup has focus.
+          await skipSession(msg.delta);
+          sendResponse({ state: session });
           break;
         default:
           sendResponse({});
