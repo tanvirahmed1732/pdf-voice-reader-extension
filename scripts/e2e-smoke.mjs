@@ -305,6 +305,52 @@ try {
     .then(() => true)
     .catch(() => false);
   check('stop clears on-page highlights', cleared);
+
+  // --- In-page sidebar (toolbar icon → SW → content/sidebar.js → iframe) ---
+  // Playwright can't click the toolbar icon; sidebar-toggle is the same path.
+  const toggleSidebar = () =>
+    webPopup.evaluate(async (tabId) => (await chrome.runtime.sendMessage({ target: 'sw', type: 'sidebar-toggle', tabId })).open, webTabId);
+
+  check('sidebar toggle reports open', (await toggleSidebar()) === true);
+  const host = web.locator('#pvr-sidebar-host');
+  const sidebarShown = await host.waitFor({ state: 'attached', timeout: 10000 }).then(() => true).catch(() => false);
+  check('sidebar injected into the page', sidebarShown);
+
+  const pushed = await web.evaluate(() => document.documentElement.style.width);
+  check('page pushed aside by sidebar width', /calc\(100% - \d+px\)/.test(pushed), pushed);
+
+  const frame = web.frameLocator('#pvr-sidebar-host iframe');
+  const embeddedPlayer = await frame
+    .locator('#player-section:not([hidden])')
+    .waitFor({ timeout: 10000 })
+    .then(() => true)
+    .catch(() => false);
+  check('sidebar iframe shows the in-page player', embeddedPlayer);
+  const embedHeaderHidden = await frame.locator('header').isHidden();
+  check('sidebar iframe hides its own header (host draws one)', embedHeaderHidden);
+
+  // Width syncs from storage (what the drag handle writes).
+  await webPopup.evaluate(() => chrome.storage.local.set({ sidebarWidth: 200 }));
+  const resized = await web
+    .waitForFunction(() => document.getElementById('pvr-sidebar-host')?.style.width === '200px', null, { timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  check('sidebar width follows stored value', resized, await web.evaluate(() => document.getElementById('pvr-sidebar-host')?.style.width));
+
+  // Overlay mode leaves the page at full width.
+  await webPopup.evaluate(() => chrome.storage.local.set({ sidebarMode: 'overlay' }));
+  const overlay = await web
+    .waitForFunction(() => document.documentElement.style.width === '', null, { timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  check('overlay mode restores page width', overlay);
+  await webPopup.evaluate(() => chrome.storage.local.set({ sidebarMode: 'push' }));
+
+  check('sidebar toggle reports closed', (await toggleSidebar()) === false);
+  const sidebarGone = await host.waitFor({ state: 'detached', timeout: 5000 }).then(() => true).catch(() => false);
+  check('sidebar removed from the page', sidebarGone);
+  const restored = await web.evaluate(() => document.documentElement.style.width);
+  check('page width restored after close', restored === '', `width='${restored}'`);
 } catch (err) {
   check('unexpected failure', false, String(err));
 } finally {
