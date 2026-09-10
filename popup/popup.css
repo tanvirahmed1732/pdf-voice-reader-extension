@@ -6,7 +6,7 @@
 }
 
 /* The page is hosted either in Chrome's side panel (≥320px) or in the
-   in-page sidebar iframe (160px and up, any width). Widths below are the
+   in-page sidebar iframe (~44px and up, any width). Widths below are the
    document width, so plain media queries follow the sidebar size. */
 
 body {
@@ -242,6 +242,65 @@ button:disabled {
 
   .hint {
     font-size: 11px;
+  }
+}
+
+/* ---------- micro: icons only, everything in one column ---------- */
+
+@media (max-width: 119px) {
+  main {
+    padding: 6px;
+    gap: 8px;
+  }
+
+  main > section:not([hidden]) {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  button {
+    padding: 7px 0;
+  }
+
+  .player-btn .ico {
+    font-size: 16px;
+  }
+
+  button .lbl,
+  .hint,
+  .field label {
+    display: none !important;
+  }
+
+  .player-controls {
+    gap: 6px;
+    margin-top: 0;
+  }
+
+  .field select {
+    padding: 5px 2px;
+    font-size: 12px;
+  }
+
+  .rate-group {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .rate-group select,
+  .rate-group button {
+    width: 100%;
+  }
+
+  .guide ol,
+  .guide p {
+    display: none;
+  }
+
+  .guide {
+    padding: 0;
+    border: 0;
   }
 }
 
