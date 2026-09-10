@@ -1,6 +1,8 @@
-// Side panel controls. Unlike a popup, the panel stays open while the user
-// switches tabs or navigates, so everything tab-specific lives in refreshTab()
-// and is re-run on tab changes; listeners are bound exactly once.
+// Controls page. Hosted two ways: in the in-page sidebar iframe on web pages
+// (content/sidebar.js, pinned to one tab via ?tabId) and in Chrome's side
+// panel as the fallback on PDF/browser tabs. Both outlive tab switches and
+// navigations, so everything tab-specific lives in refreshTab() and is re-run
+// on tab changes; listeners are bound exactly once.
 import { loadSettings, saveSettings } from '../reader/settings.js';
 
 const openCurrentBtn = document.getElementById('open-current');
@@ -24,8 +26,19 @@ let panelWindowId = null; // side panels are per-window; follow this window's ta
 let voicesLoaded = false;
 let refreshSeq = 0; // drops stale refreshes when tabs change quickly
 
-// Tests open this page as a normal tab with ?tabId=… to pin the target tab.
-const tabOverride = new URLSearchParams(location.search).get('tabId');
+// ?tabId=… pins the target tab: the in-page sidebar iframe uses it (one
+// iframe per tab), and tests open this page as a normal tab with it.
+// ?embed=1 marks the in-page sidebar, whose host draws its own header.
+const params = new URLSearchParams(location.search);
+const tabOverride = params.get('tabId');
+if (params.get('embed') === '1') document.body.classList.add('embed');
+
+// Play button shows an icon + a label span so the label can be hidden or
+// stacked by CSS at narrow widths.
+function setPlayLabel(icon, label) {
+  playBtn.querySelector('.ico').textContent = icon;
+  playBtn.querySelector('.lbl').textContent = label;
+}
 
 const sw = (msg) => chrome.runtime.sendMessage({ ...msg, target: 'sw' });
 
@@ -99,15 +112,15 @@ function selectedVoice() {
 function renderPlayerState() {
   const active = sessionIsForThisTab() && state.status !== 'error';
   if (active && state.status === 'playing') {
-    playBtn.textContent = '⏸ Pause';
+    setPlayLabel('⏸', 'Pause');
     stopBtn.disabled = false;
     statusEl.textContent = state.note || `Reading sentence ${state.k + 1}/${state.total}`;
   } else if (active && state.status === 'paused') {
-    playBtn.textContent = '▶ Resume';
+    setPlayLabel('▶', 'Resume');
     stopBtn.disabled = false;
     statusEl.textContent = `Paused at sentence ${state.k + 1}/${state.total}`;
   } else {
-    playBtn.textContent = '▶ Play';
+    setPlayLabel('▶', 'Play');
     stopBtn.disabled = true;
     statusEl.textContent =
       sessionIsForThisTab() && state.status === 'error'
