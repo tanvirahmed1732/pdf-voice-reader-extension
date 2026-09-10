@@ -2,10 +2,15 @@
   color-scheme: light dark;
   --accent: #d43c32;
   --accent-dark: #a01e5a;
+  --line: rgba(128, 128, 128, 0.4);
 }
 
+/* The page is hosted either in Chrome's side panel (≥320px) or in the
+   in-page sidebar iframe (160px and up, any width). Widths below are the
+   document width, so plain media queries follow the sidebar size. */
+
 body {
-  min-width: 280px;
+  min-width: 0;
   max-width: 100%;
   min-height: 100vh;
   box-sizing: border-box;
@@ -27,10 +32,19 @@ header h1 {
   font-size: 15px;
   margin: 0;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Inside the in-page sidebar the host draws its own header. */
+body.embed header {
+  display: none;
 }
 
 main {
   padding: 14px;
+  max-width: 600px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -40,11 +54,14 @@ button {
   width: 100%;
   padding: 9px 12px;
   border-radius: 8px;
-  border: 1px solid rgba(128, 128, 128, 0.4);
+  border: 1px solid var(--line);
   background: transparent;
   color: inherit;
   font-size: 14px;
   cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 button:hover:not(:disabled) {
@@ -71,7 +88,10 @@ button:disabled {
   margin: 6px 0 0;
   font-size: 12px;
   opacity: 0.7;
+  overflow-wrap: anywhere;
 }
+
+/* ---------- player ---------- */
 
 .player-row {
   display: flex;
@@ -84,33 +104,46 @@ button:disabled {
 
 .player-row #pg-stop {
   width: 44px;
+  flex-shrink: 0;
+}
+
+.player-row #pg-stop .lbl {
+  display: none;
 }
 
 .player-controls {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px 10px;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   margin-top: 10px;
 }
 
-.player-controls label {
+.field {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 6px 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.field label {
   font-size: 12px;
   opacity: 0.75;
 }
 
-.player-controls select {
+.field select {
   width: 100%;
+  min-width: 0;
   padding: 5px 8px;
   border-radius: 6px;
-  border: 1px solid rgba(128, 128, 128, 0.4);
+  border: 1px solid var(--line);
   background: transparent;
   color: inherit;
   font-size: 13px;
 }
 
-.player-controls select option,
-.player-controls select optgroup {
+.field select option,
+.field select optgroup {
   color: initial;
   background: Canvas;
 }
@@ -119,6 +152,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
 }
 
 .rate-group select {
@@ -130,7 +164,7 @@ button:disabled {
   flex-shrink: 0;
   padding: 5px 0;
   border-radius: 6px;
-  border: 1px solid rgba(128, 128, 128, 0.4);
+  border: 1px solid var(--line);
   background: transparent;
   color: inherit;
   font-size: 15px;
@@ -141,6 +175,8 @@ button:disabled {
 .rate-group button:hover {
   background: rgba(128, 128, 128, 0.15);
 }
+
+/* ---------- guide ---------- */
 
 .guide {
   border: 1px solid rgba(128, 128, 128, 0.35);
@@ -159,4 +195,88 @@ button:disabled {
 
 .guide li {
   margin-bottom: 2px;
+}
+
+/* ---------- narrow: everything stacks top to bottom ---------- */
+
+@media (max-width: 259px) {
+  main {
+    padding: 10px;
+    gap: 12px;
+  }
+
+  .player-row {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .player-row #pg-stop {
+    width: 100%;
+  }
+
+  .player-row #pg-stop .lbl {
+    display: inline;
+  }
+
+  .field {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .guide {
+    padding: 8px 10px;
+  }
+}
+
+/* ---------- very narrow: icons carry the meaning ---------- */
+
+@media (max-width: 179px) {
+  button {
+    padding: 8px 6px;
+    font-size: 13px;
+  }
+
+  .player-btn .ico {
+    font-size: 15px;
+  }
+
+  .hint {
+    font-size: 11px;
+  }
+}
+
+/* ---------- wide: voice and speed sit side by side ---------- */
+
+@media (min-width: 440px) {
+  main {
+    padding: 16px 18px;
+  }
+
+  .player-controls {
+    flex-direction: row;
+    align-items: start;
+  }
+
+  .field {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .field-voice {
+    flex: 3;
+  }
+
+  .field-rate {
+    flex: 2;
+    max-width: 220px;
+  }
+
+  .player-row #pg-stop {
+    width: auto;
+    padding: 9px 16px;
+  }
+
+  .player-row #pg-stop .lbl {
+    display: inline;
+  }
 }
