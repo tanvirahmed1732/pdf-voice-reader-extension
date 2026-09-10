@@ -1,3 +1,6 @@
+// Side panel controls. Unlike a popup, the panel stays open while the user
+// switches tabs or navigates, so everything tab-specific lives in refreshTab()
+// and is re-run on tab changes; listeners are bound exactly once.
 import { loadSettings, saveSettings } from '../reader/settings.js';
 
 const openCurrentBtn = document.getElementById('open-current');
@@ -14,37 +17,15 @@ const rateDownBtn = document.getElementById('pg-rate-down');
 const rateUpBtn = document.getElementById('pg-rate-up');
 const statusEl = document.getElementById('pg-status');
 
-// Clamped to 0.25–3, 0.05 steps. Non-preset values show as a custom option.
-// persist=true saves the setting and pushes it to a running read.
-async function setRate(rate, persist) {
-  rate = Math.min(3, Math.max(0.25, Math.round(rate * 100) / 100));
-  settings.rate = rate;
-  const val = String(rate);
-  const preset = [...rateSel.options].find(
-    (o) => !o.classList.contains('custom-rate') && o.value === val,
-  );
-  let custom = rateSel.querySelector('option.custom-rate');
-  if (preset) {
-    if (custom) custom.remove();
-  } else {
-    if (!custom) {
-      custom = document.createElement('option');
-      custom.className = 'custom-rate';
-      rateSel.appendChild(custom);
-    }
-    custom.value = val;
-    custom.textContent = `${rate}×`;
-  }
-  rateSel.value = val;
-  if (persist) {
-    saveSettings(settings);
-    if (state && state.tabId === tab.id) await sw({ type: 'ui-set-rate', rate });
-  }
-}
-
-let tab = null;
+let tab = null; // the tab the panel currently controls
 let settings = null;
 let state = null; // playback session from the service worker
+let panelWindowId = null; // side panels are per-window; follow this window's tabs
+let voicesLoaded = false;
+let refreshSeq = 0; // drops stale refreshes when tabs change quickly
+
+// Tests open this page as a normal tab with ?tabId=… to pin the target tab.
+const tabOverride = new URLSearchParams(location.search).get('tabId');
 
 const sw = (msg) => chrome.runtime.sendMessage({ ...msg, target: 'sw' });
 
@@ -71,6 +52,43 @@ function isWebPage(url) {
   }
 }
 
+function isReaderPage(url) {
+  return typeof url === 'string' && url.startsWith(chrome.runtime.getURL('reader/'));
+}
+
+// True when the service worker's session belongs to the tab this panel shows.
+function sessionIsForThisTab() {
+  return !!(state && tab && state.tabId === tab.id);
+}
+
+// Clamped to 0.25–3, 0.05 steps. Non-preset values show as a custom option.
+// persist=true saves the setting and pushes it to a running read.
+async function setRate(rate, persist) {
+  rate = Math.min(3, Math.max(0.25, Math.round(rate * 100) / 100));
+  settings.rate = rate;
+  const val = String(rate);
+  const preset = [...rateSel.options].find(
+    (o) => !o.classList.contains('custom-rate') && o.value === val,
+  );
+  let custom = rateSel.querySelector('option.custom-rate');
+  if (preset) {
+    if (custom) custom.remove();
+  } else {
+    if (!custom) {
+      custom = document.createElement('option');
+      custom.className = 'custom-rate';
+      rateSel.appendChild(custom);
+    }
+    custom.value = val;
+    custom.textContent = `${rate}×`;
+  }
+  rateSel.value = val;
+  if (persist) {
+    saveSettings(settings);
+    if (sessionIsForThisTab()) await sw({ type: 'ui-set-rate', rate });
+  }
+}
+
 // ---------- in-page player ----------
 
 function selectedVoice() {
@@ -79,7 +97,7 @@ function selectedVoice() {
 }
 
 function renderPlayerState() {
-  const active = state && state.tabId === tab.id && state.status !== 'error';
+  const active = sessionIsForThisTab() && state.status !== 'error';
   if (active && state.status === 'playing') {
     playBtn.textContent = '⏸ Pause';
     stopBtn.disabled = false;
@@ -92,7 +110,7 @@ function renderPlayerState() {
     playBtn.textContent = '▶ Play';
     stopBtn.disabled = true;
     statusEl.textContent =
-      state?.status === 'error'
+      sessionIsForThisTab() && state.status === 'error'
         ? state.note
         : 'Starts from your selected text, if any, and keeps reading until you stop it.';
   }
@@ -175,20 +193,18 @@ async function populateVoices() {
   }
 }
 
-async function initPlayer() {
-  playerSection.hidden = false;
-  setRate(settings.rate, false);
-  await populateVoices();
-
-  const resp = await sw({ type: 'ui-state' });
-  state = resp?.state ?? null;
+async function refreshState() {
+  const resp = await sw({ type: 'ui-state' }).catch(() => null);
+  if (resp) state = resp.state;
   renderPlayerState();
+}
 
+function bindPlayerControls() {
   playBtn.addEventListener('click', async () => {
-    const active = state && state.tabId === tab.id;
-    if (active && state.status === 'playing') {
+    if (!tab) return;
+    if (sessionIsForThisTab() && state.status === 'playing') {
       state = (await sw({ type: 'ui-pause' })).state;
-    } else if (active && state.status === 'paused') {
+    } else if (sessionIsForThisTab() && state.status === 'paused') {
       state = (await sw({ type: 'ui-resume' })).state;
     } else {
       playBtn.disabled = true;
@@ -222,23 +238,24 @@ async function initPlayer() {
     else if (voice.kind === 'neural') settings.neuralVoiceId = voice.id;
     else settings.systemVoiceId = voice.id;
     saveSettings(settings);
-    if (state && state.tabId === tab.id) await sw({ type: 'ui-set-voice', voice });
+    if (sessionIsForThisTab()) await sw({ type: 'ui-set-voice', voice });
   });
 
   rateSel.addEventListener('change', () => setRate(Number(rateSel.value), true));
   rateDownBtn.addEventListener('click', () => setRate(settings.rate - 0.05, true));
   rateUpBtn.addEventListener('click', () => setRate(settings.rate + 0.05, true));
 
-  // Keyboard while the popup has focus (the page's own handlers can't fire
+  // Keyboard while the panel has focus (the page's own handlers can't fire
   // then): Space toggles play/pause, ←/→ skip to the previous/next sentence.
-  // Ignored when a dropdown/field is focused.
+  // Ignored when a dropdown/field is focused or the player isn't shown.
   document.addEventListener('keydown', async (e) => {
     const t = e.target;
     if (t && /^(SELECT|INPUT|TEXTAREA)$/.test(t.tagName)) return;
+    if (playerSection.hidden) return;
     if (e.code === 'Space') {
       e.preventDefault();
       playBtn.click();
-    } else if ((e.code === 'ArrowLeft' || e.code === 'ArrowRight') && state && state.tabId === tab.id) {
+    } else if ((e.code === 'ArrowLeft' || e.code === 'ArrowRight') && sessionIsForThisTab()) {
       e.preventDefault();
       const resp = await sw({ type: 'ui-skip', delta: e.code === 'ArrowLeft' ? -1 : 1 });
       if (resp?.state) {
@@ -248,31 +265,30 @@ async function initPlayer() {
     }
   });
 
-  // Live progress while the popup stays open.
-  setInterval(async () => {
-    const resp = await sw({ type: 'ui-state' }).catch(() => null);
-    if (resp) {
-      state = resp.state;
-      renderPlayerState();
-    }
+  // Live progress while the panel stays open.
+  setInterval(() => {
+    if (!playerSection.hidden) refreshState();
   }, 1000);
 }
 
-// ---------- init ----------
+// ---------- tab-specific view ----------
 
-async function init() {
-  settings = await loadSettings();
-
-  const override = new URLSearchParams(location.search).get('tabId');
-  tab = override
-    ? await chrome.tabs.get(Number(override))
-    : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+async function showForTab() {
+  const seq = ++refreshSeq;
   const url = tab?.url ?? '';
 
+  openCurrentBtn.hidden = true;
+  openCurrentBtn.disabled = true;
+  fileAccessSection.hidden = true;
+  playerSection.hidden = false;
+  currentHint.textContent = '';
+
   if (looksLikePdf(url)) {
+    playerSection.hidden = true;
     openCurrentBtn.hidden = false;
     if (url.startsWith('file:')) {
       const allowed = await chrome.extension.isAllowedFileSchemeAccess();
+      if (seq !== refreshSeq) return;
       if (allowed) {
         openCurrentBtn.disabled = false;
       } else {
@@ -282,25 +298,67 @@ async function init() {
     } else {
       openCurrentBtn.disabled = false;
     }
+  } else if (isReaderPage(url)) {
+    playerSection.hidden = true;
+    currentHint.textContent = 'The PDF reader is open in this tab. Use its own toolbar to play.';
   } else if (isWebPage(url)) {
-    await initPlayer();
+    if (!voicesLoaded) {
+      voicesLoaded = true;
+      setRate(settings.rate, false);
+      await populateVoices();
+      if (seq !== refreshSeq) return;
+    }
+    await refreshState();
   } else {
-    currentHint.textContent = 'This page cannot be read (browser pages are off-limits to extensions).';
+    playerSection.hidden = true;
+    currentHint.textContent =
+      'This page cannot be read (browser pages are off-limits to extensions). Switch to a web page or PDF.';
   }
+}
+
+async function refreshTab() {
+  try {
+    tab = tabOverride
+      ? await chrome.tabs.get(Number(tabOverride))
+      : ((await chrome.tabs.query({ active: true, windowId: panelWindowId }))[0] ?? null);
+  } catch {
+    tab = null;
+  }
+  await showForTab();
+}
+
+function watchTabs() {
+  chrome.tabs.onActivated.addListener(({ windowId }) => {
+    if (windowId === panelWindowId) refreshTab();
+  });
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (tab && tabId === tab.id && changeInfo.url !== undefined) refreshTab();
+  });
+}
+
+// ---------- init ----------
+
+async function init() {
+  settings = await loadSettings();
+  panelWindowId = (await chrome.windows.getCurrent()).id;
+
+  bindPlayerControls();
 
   openCurrentBtn.addEventListener('click', async () => {
-    await chrome.tabs.create({ url: readerUrl(`file=${encodeURIComponent(url)}`) });
-    window.close();
+    if (!tab?.url) return;
+    await chrome.tabs.create({ url: readerUrl(`file=${encodeURIComponent(tab.url)}`) });
   });
 
   openLocalBtn.addEventListener('click', async () => {
     await chrome.tabs.create({ url: readerUrl(null) });
-    window.close();
   });
 
   openSettingsBtn.addEventListener('click', () => {
     chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
   });
+
+  watchTabs();
+  await refreshTab();
 }
 
 init();
