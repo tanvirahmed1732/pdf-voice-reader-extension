@@ -37,6 +37,37 @@ header h1 {
   text-overflow: ellipsis;
 }
 
+header h1 {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Header button (Chrome side panel only): hand the controls back to the page. */
+.hdr-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.hdr-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.hdr-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
 /* Inside the in-page sidebar the host draws its own header. */
 body.embed header {
   display: none;
