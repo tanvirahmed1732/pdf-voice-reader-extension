@@ -366,6 +366,27 @@ try {
   const storedW = await webPopup.evaluate(async () => (await chrome.storage.local.get('sidebarWidth')).sidebarWidth);
   check('dragged width persisted', storedW === afterDrag.hostW, `stored=${storedW}`);
 
+  // Resizing must not act as click-to-jump: pause a read, drag the handle
+  // across the page text, and the position/paused state must be untouched
+  // (a jump would restart playback at the clicked sentence).
+  await frame.locator('#pg-play').click();
+  await webPopup.waitForFunction(async () => (await chrome.runtime.sendMessage({ target: 'sw', type: 'ui-state' })).state?.status === 'playing', null, { timeout: 15000 });
+  await frame.locator('#pg-play').click(); // pause
+  await webPopup.waitForFunction(async () => (await chrome.runtime.sendMessage({ target: 'sw', type: 'ui-state' })).state?.status === 'paused', null, { timeout: 5000 });
+  const before = await webPopup.evaluate(async () => (await chrome.runtime.sendMessage({ target: 'sw', type: 'ui-state' })).state);
+  const g2 = await web.evaluate(() => {
+    const r = document.getElementById('pvr-sidebar-host').getBoundingClientRect();
+    return { left: r.left, y: r.top + 120 }; // level with the page's text
+  });
+  await web.mouse.move(g2.left + 1, g2.y);
+  await web.mouse.down();
+  await web.mouse.move(g2.left + 60, g2.y, { steps: 5 });
+  await web.mouse.up();
+  await web.waitForTimeout(500);
+  const after = await webPopup.evaluate(async () => (await chrome.runtime.sendMessage({ target: 'sw', type: 'ui-state' })).state);
+  check('resizing while paused does not jump or resume', after?.status === 'paused' && after?.k === before?.k, `before=${before?.status}@${before?.k} after=${after?.status}@${after?.k}`);
+  await frame.locator('#pg-stop').click();
+
   // Overlay mode leaves the page at full width.
   await webPopup.evaluate(() => chrome.storage.local.set({ sidebarMode: 'overlay' }));
   const overlay = await web
