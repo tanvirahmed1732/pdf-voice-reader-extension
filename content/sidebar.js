@@ -190,6 +190,11 @@
     S.modeBtn = modeBtn;
 
     handle.addEventListener('pointerdown', startDrag);
+    // Clicks on the sidebar are ours: keep them from reaching the page's own
+    // listeners (menus that close on outside-click, etc.).
+    for (const evt of ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup']) {
+      host.addEventListener(evt, (e) => e.stopPropagation());
+    }
     closeBtn.addEventListener('click', () => {
       chrome.runtime.sendMessage({ target: 'sw', type: 'sidebar-close' }).catch(() => {});
     });
