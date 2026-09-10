@@ -423,24 +423,26 @@ try {
   const storedFloat = await webPopup.evaluate(async () => (await chrome.storage.local.get('sidebarFloat')).sidebarFloat);
   check('float geometry persisted', storedFloat && Math.abs(storedFloat.h - shrunk) <= 1 && Math.abs(storedFloat.x - moved.x) <= 1, JSON.stringify(storedFloat));
 
-  // Header button cycles float → overlay → push → float.
+  // Header button: float → Chrome's side panel. The in-page sidebar goes
+  // away and the mode is persisted; Chrome then owns icon clicks.
   const modeBtn = web.locator('#pvr-sidebar-host .mode');
-  const modeAfterClicks = [];
-  for (let i = 0; i < 3; i++) {
-    await modeBtn.click();
-    await web.waitForTimeout(150);
-    modeAfterClicks.push(await webPopup.evaluate(async () => (await chrome.storage.local.get('sidebarMode')).sidebarMode));
-  }
-  check('mode button cycles float → overlay → push → float', modeAfterClicks.join(',') === 'overlay,push,float', modeAfterClicks.join(','));
+  await modeBtn.click();
+  const handedOff = await host.waitFor({ state: 'detached', timeout: 5000 }).then(() => true).catch(() => false);
+  const modeNow = await webPopup.evaluate(async () => (await chrome.storage.local.get('sidebarMode')).sidebarMode);
+  check('mode button hands off to Chrome side panel', handedOff && modeNow === 'panel', `mode=${modeNow}`);
+  const behavior = await webPopup.evaluate(async () => (await chrome.sidePanel.getPanelBehavior()).openPanelOnActionClick);
+  check('icon toggles Chrome panel natively in panel mode', behavior === true);
 
-  // Overlay mode leaves the page at full width.
-  await webPopup.evaluate(() => chrome.storage.local.set({ sidebarMode: 'overlay' }));
-  const overlay = await web
-    .waitForFunction(() => document.documentElement.style.width === '', null, { timeout: 5000 })
-    .then(() => true)
-    .catch(() => false);
-  check('overlay mode restores page width', overlay);
-  await webPopup.evaluate(() => chrome.storage.local.set({ sidebarMode: 'push' }));
+  // Panel → in-page (the button inside Chrome's panel sends this).
+  const back = await webPopup.evaluate(async (tabId) => {
+    const { windowId } = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    return chrome.runtime.sendMessage({ target: 'sw', type: 'sidebar-mode', mode: 'push', windowId });
+  }, webTabId);
+  const backInPage = await host.waitFor({ state: 'attached', timeout: 5000 }).then(() => true).catch(() => false);
+  check('panel button returns controls into the page', back?.ok === true && backInPage, JSON.stringify(back));
+  const behavior2 = await webPopup.evaluate(async () => (await chrome.sidePanel.getPanelBehavior()).openPanelOnActionClick);
+  check('icon back to in-page toggling in push mode', behavior2 === false);
 
   check('sidebar toggle reports closed', (await toggleSidebar()) === false);
   const sidebarGone = await host.waitFor({ state: 'detached', timeout: 5000 }).then(() => true).catch(() => false);
